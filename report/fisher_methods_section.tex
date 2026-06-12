@@ -50,20 +50,29 @@ sims-MC + iteration & $\sim39,600$ & 28\,600 \\
 \bottomrule
 \end{tabular}
 \caption{Fisher cost for a Planck-like analysis at
-$\epsilon=0.1$. ``+ iteration'' assumes a fiducial good to
-$\sim1\sigma$ per band (one Newton--Raphson re-centering; trivially true
-for Planck's $\Lambda$CDM), which deflates the bias requirement so the
-budget is set by getting the \emph{covariance} $R^{-1}$ itself to
-$\sim$2\% ($n_A\ge\rho/2(0.01)^2\approx250$ columns per band,
-$\Delta\ell=30$, 3 components).}
+$\epsilon=0.1$.  ``+ iteration'' means the \emph{around-fiducial}
+estimator $\hat c = c_{\rm fid} + \hat R^{-1}(\hat y(d) -
+\langle\hat y\rangle_{\rm fid\ sims})$ with one Newton--Raphson
+re-centering of the fiducial: the sim mean carries the \emph{exact}
+response of the filter, so the $\hat R$ error multiplies
+$(c-c_{\rm fid})$ instead of $c$ (verified numerically: a 20\%-wrong
+fiducial deflates the subsampled offsets by the predicted factor 5;
+the plain $\hat R^{-1}(\hat y-\hat n)$ form does \emph{not}
+benefit --- its bias is $R^{-1}\delta\hat R\,c$ for any fiducial).
+The $1/\epsilon^2\approx100$ extra sims for
+$\langle\hat y\rangle$ are negligible.  The budget is then set by the
+\emph{covariance} accuracy of $R^{-1}$ ($\sim$2\%:
+$n_A\ge\rho/2(0.01)^2\approx250$ columns per band, $\Delta\ell=30$,
+3 components).}
 \end{table}
 
 Without iteration, neither stochastic engine is affordable for
 signal-dominated data: the subsampling fraction obeys
 $f/(1-f)\ge\rho f_{\rm sky}(S/(S+N))^2/2\epsilon^2$ --- note the band
 width cancels --- giving $f\simeq0.75$, while sims-MC needs
-$10^8$ solves.  With a good fiducial plus one iteration the offset
-multiplies $(c-c_{\rm fid})$ instead of $c$ and both engines drop to
+$10^8$ solves.  With a good fiducial, the around-fiducial estimator and
+one re-centering make the offset multiply $(c-c_{\rm fid})$ instead of
+$c$, and both engines drop to
 $\mathcal{O}(5\times10^4)$ solves: about 35\,750 core-h
 ($\approx$6 days on a 256-core
 farm), or $\sim$1 week on a single A100-class GPU once a GPU SHT backend

@@ -47,7 +47,11 @@ def validation_section():
         "curved-in-$\\ell$ spectra; "
         "compared to the window-convolved prediction).  The $\\chi^2$ is "
         "that of the full bandpower vector against the target using the "
-        "QML covariance $R^{-1}$.\n")
+        "QML covariance $R^{-1}$.  Test 3 replaces the smooth variant by "
+        "the \\emph{deviation} mode: the smooth \\texttt{pyccl} fiducial "
+        "is kept inside the covariance and flat band deviations are "
+        "fitted; the target is exactly zero, with no window or binning "
+        "ambiguity.\n")
     out.append("\\begin{table}[h]\\centering\\small\n"
                "\\begin{tabular}{llrrrrr}\n\\toprule\n"
                "suite & variant & $\\langle\\chi^2\\rangle$ & dof & KS $p$ & "
@@ -56,7 +60,8 @@ def validation_section():
         s = jload(f"{tag}_summary.json")
         if s is None:
             continue
-        vname = {"flat": "band-flat", "curved": "smooth"}
+        vname = {"flat": "band-flat", "curved": "smooth",
+                 "dev": "deviations (smooth fid.)"}
         for variant, r in s.items():
             out.append(
                 f"{tag} & {vname.get(variant, variant)} & "
@@ -73,7 +78,7 @@ def validation_section():
         if jload(f"{tag}_summary.json") is None:
             continue
         out.append(f"\n\\subsection{{Test {tag[-1]}: {desc}}}\n")
-        for variant in ("flat", "curved"):
+        for variant in ("flat", "curved", "dev"):
             for kind, cap in [("spectra", "recovered bandpowers"),
                               ("chi2", "$\\chi^2$ distribution"),
                               ("pulls", "pull distribution")]:
@@ -83,7 +88,7 @@ def validation_section():
                         "\\begin{figure}[h]\\centering"
                         f"\\includegraphics[width=.78\\textwidth]{{{f}}}"
                         f"\\caption{{{tag} "
-                        f"({'band-flat' if variant == 'flat' else 'smooth'}"
+                        f"({ {'flat': 'band-flat', 'curved': 'smooth', 'dev': 'deviations from smooth fiducial'}[variant] }"
                         f" input): {cap}.}}"
                         "\\end{figure}\n")
         out.append("\\clearpage\n")

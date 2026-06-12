@@ -34,7 +34,7 @@ P.add_argument("--shape-noise", type=float, default=0.3)
 P.add_argument("--fisher", default="exact", choices=["exact", "mc"])
 P.add_argument("--batch", type=int, default=128)
 P.add_argument("--quick", action="store_true")
-P.add_argument("--variants", default="flat,curved")
+P.add_argument("--variants", default="dev,flat")
 P.add_argument("--tag", default="val3")
 args = P.parse_args()
 if args.quick:
@@ -107,9 +107,14 @@ for variant in args.variants.split(","):
             mask * q + rng.normal(0, sigma_gamma, npix),
             mask * u + rng.normal(0, sigma_gamma, npix)]))
     data = w.pack_data([np.array(maps_g), np.array(maps_s)])
-    res = w.estimate(data)
+    res = w.estimate(data, deviations=(variant == "dev"))
 
-    if variant == "flat":
+    if variant == "dev":
+        # smooth pyccl fiducial kept in the model; flat deviations fitted:
+        # exactly unbiased target = 0, no window/binning ambiguity
+        target = {s2: np.zeros(int(w.is_user_band.sum()))
+                  for s2 in w.spec_names}
+    elif variant == "flat":
         target = {s: w.user_bins.bin_cl(
             {"g_0 x g_0": cls_v["gg"], "s_E x s_E": cls_v["ee"],
              "s_B x s_B": cls_v["bb"], "g_0 x s_E": cls_v["ge"],

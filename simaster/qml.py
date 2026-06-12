@@ -270,9 +270,10 @@ class QMLWorkspace:
         Nc, K = len(self.comp_names), self.index.nmodes
         nl = self.ls.size
         lmode = np.asarray(self.index.l) - self.lmin
-        lmode_j = jnp.asarray(lmode)
-        T = np.zeros((Nc, Nc, Nc, Nc, nl, nl))
-        W2d = np.zeros((Nc, Nc, K))
+        # T and W2d accumulate on device; transferred to host once at the end
+        # (per-l host syncs dominated the runtime otherwise)
+        T_dev = jnp.zeros((Nc, Nc, Nc, Nc, nl, nl))
+        W2d_dev = jnp.zeros((Nc, Nc, K))
         noisevar = self.cov.noisevar
 
         J = max(1, self.batch_size // Nc)
@@ -289,21 +290,23 @@ class QMLWorkspace:
             A = self.cov.to_modes(V)                      # (Nc, K, jc*Nc)
             H = A.reshape(Nc, K, jc, Nc).transpose(0, 1, 3, 2)  # (a,k,c',j)
             Vr = V.reshape(-1, jc, Nc)
-            W2d[:, :, j0:j0 + jc] += np.asarray(
-                jnp.einsum("pjc,p,pjd->cdj", Vr, noisevar, Vr)).transpose(0, 1, 2)
-            # accumulate T: loop over row-l blocks
-            lj = lmode[j0:j0 + jc]
+            W2d_dev = W2d_dev.at[:, :, j0:j0 + jc].add(
+                jnp.einsum("pjc,p,pjd->cdj", Vr, noisevar, Vr))
+            # accumulate T: loop over row-l blocks, all on device
+            lj = jnp.asarray(lmode[j0:j0 + jc])
             for l1 in range(nl):
                 sl = self.index.band_slice(l1 + self.lmin, l1 + self.lmin)
                 Hl = H[:, sl.start:sl.stop]               # (a, kl, c', j)
                 X = jnp.einsum("akcj,bkdj->abcdj", Hl, Hl)
                 Xl = jax.ops.segment_sum(X.transpose(4, 0, 1, 2, 3),
-                                         jnp.asarray(lj), num_segments=nl)
-                T[:, :, :, :, l1, :] += np.asarray(
+                                         lj, num_segments=nl)
+                T_dev = T_dev.at[:, :, :, :, l1, :].add(
                     Xl.transpose(1, 2, 3, 4, 0))
             if self.verbose and (j0 // J) % 8 == 0:
                 self._log(f"exact response {j0 + jc}/{K} modes "
                           f"(cg {self.last_cg[0]} it)")
+        T = np.asarray(T_dev)
+        W2d = np.asarray(W2d_dev)
 
         # ---- assemble response / windows / noise bias -----------------------
         ns = len(self.spec_pairs)

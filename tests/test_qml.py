@@ -153,3 +153,29 @@ def test_compat_shim():
                                  verbose=False)
     assert out.shape == (1, b.nbands)
     assert np.all(np.isfinite(out))
+
+
+@pytest.mark.slow
+def test_run_exact_matches_dense_reference():
+    """Workspace exact engine == brute-force dense ExactQML."""
+    mask = np.zeros(NPIX); mask[: 2 * NPIX // 3] = 1.0
+    ivar = np.full(NPIX, 4e4)
+    l = np.arange(LMAX + 1).astype(float)
+    b = sm.Bins.linear(2, LMAX, 6)
+    clTT = np.where(l >= 2, 1e-2 / np.maximum(l, 1) ** 2, 0)
+    clEE = np.where(l >= 2, 4e-3 / np.maximum(l, 1) ** 2, 0)
+    clBB = np.where(l >= 2, 1e-3 / np.maximum(l, 1) ** 2, 0)
+    clTE = 0.4 * np.sqrt(clTT * clEE)
+    fT = sm.Field(mask, [np.zeros(NPIX)], ivar=ivar, name="t")
+    fP = sm.Field(mask, [np.zeros(NPIX)] * 2, spin=2, ivar=ivar, name="p")
+    cld = {('t_0', 't_0'): clTT, ('p_E', 'p_E'): clEE,
+           ('p_B', 'p_B'): clBB, ('t_0', 'p_E'): clTE}
+    w = sm.QMLWorkspace([fT, fP], b, cld, lmax=LMAX, fisher_mode="exact",
+                        deproject_low_ell=False, cg_tol=1e-9, verbose=False,
+                        batch_size=300)
+    w.run_exact()
+    ex = ExactQML([fT, fP], w.bins, w.cov.clmat, w.index)
+    R = ex.response()
+    dR = np.abs(w.R_hat - R) / np.sqrt(np.outer(np.diag(R), np.diag(R)))
+    assert dR.max() < 1e-8
+    assert np.abs(w.n_hat - ex.noise_bias()).max() < 1e-8 * np.abs(ex.noise_bias()).max()

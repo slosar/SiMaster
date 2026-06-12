@@ -80,6 +80,15 @@ def validation_section():
                         f"\\caption{{{tag} ({variant}): {cap}.}}"
                         "\\end{figure}\n")
         out.append("\\clearpage\n")
+    out.append(
+        "\n\\subsection{Optimality vs pseudo-$C_\\ell$}\n"
+        "On 100 common realizations (spin-0 CMB-like field, $N_{\\rm side}=16$, "
+        "same mask and bins; \\texttt{notebooks/simaster\\_vs\\_namaster.ipynb}) "
+        "the empirical QML error bars are $0.38\\times$, $0.52\\times$ and "
+        "$0.78\\times$ the NaMaster pseudo-$C_\\ell$ ones in the three lowest "
+        "bands, converging to unity at $\\ell\\gtrsim25$, and the predicted "
+        "QML covariance matches the empirical scatter at the few-percent "
+        "level.\n")
     mc = jload("val1_mc_summary.json")
     if mc:
         out.append(

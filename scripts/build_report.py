@@ -100,6 +100,21 @@ def validation_section():
         "exact run is unaffordable, combined with iteration for strongly "
         "signal-dominated bands.\n")
     out.append(
+        "\n\\subsection{Radical compression (offset-lognormal likelihood)}\n"
+        "Following Bond, Jaffe \\& Knox (2000), "
+        "\\texttt{simaster.compress} reduces an estimate to the triplet "
+        "$\\{\\hat c_b, x_b, F_{bb'}\\}$ with the likelihood Gaussian in "
+        "$Z_b=\\ln(c_b+x_b)$ (auto-spectra; crosses stay Gaussian).  The "
+        "x-factors generalize $x_\\ell=\\mathcal N_\\ell/B_\\ell^2$ via "
+        "the exact identity $\\hat c + x = R^{-1}\\hat y$ (total power), "
+        "i.e.\\ $x=R^{-1}n$ from the workspace response and noise bias.  "
+        "Against the exact dense likelihood at $N_{\\rm side}=8$ the "
+        "offset-lognormal is good to $|\\Delta(-2\\ln L)|\\lesssim1$ "
+        "within $\\pm1.5\\sigma$ even in the lowest $\\Delta\\ell=5$ "
+        "band and always beats the Gaussian out to $3\\sigma$; the far "
+        "low-$C$ tail of the exact likelihood is steeper (use narrower "
+        "low-$\\ell$ bands if deep lower tails matter).\n")
+    out.append(
         "\n\\subsection{Optimality vs pseudo-$C_\\ell$}\n"
         "On 100 common realizations (spin-0 CMB-like field, $N_{\\rm side}=16$, "
         "same mask and bins; \\texttt{notebooks/simaster\\_vs\\_namaster.ipynb}) "

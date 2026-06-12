@@ -16,7 +16,9 @@ from .bins import Bins
 from .qml import QMLWorkspace, BandpowerResult
 from .compat import compute_full_master
 from .utils import cl_matrix, RealAlmIndex
+from .radical import compress, CompressedLikelihood
 
 __version__ = "0.1.0"
 __all__ = ["Field", "Bins", "QMLWorkspace", "BandpowerResult",
-           "compute_full_master", "cl_matrix", "RealAlmIndex"]
+           "compute_full_master", "cl_matrix", "RealAlmIndex",
+           "compress", "CompressedLikelihood"]

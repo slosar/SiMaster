@@ -194,3 +194,22 @@ engine remains the Fisher method of choice; Hessian-*vector* products cost
 ~2 solves and enable truncated-Newton optimization or HMC over bandpowers,
 and gradients w.r.t. any upstream parametrization (cosmological parameters,
 calibration, beams) chain through `clmat` for free.
+
+## Radical compression (offset-lognormal likelihood, Bond–Jaffe–Knox 2000)
+
+`simaster.compress(workspace, result)` reduces a QML estimate to the BJK
+triplet `{c_hat, x, F}` (`CompressedLikelihood`, with `save`/`load` and a
+callable `loglike`). The x-factors generalize the ideal `x_l = N_l/B_l^2`
+through the exact identity `c_hat + x = R^-1 y` (total signal+noise power,
+BJK's D-hat): `x = R^-1 n`, available exactly from the workspace response
+and noise bias. The likelihood is Gaussian in `Z_b = ln(c_b + x_b)` for
+auto-spectra with weight `M^(Z) = (c_hat+x) F (c_hat+x)`; cross-spectra
+(which can be negative) stay Gaussian, as is standard. Verified against
+the exact dense likelihood at nside=8: |delta(-2lnL)| <~ 1 within +-1.5
+sigma even for the lowest Delta_l=5 band, always better than a plain
+Gaussian out to 3 sigma; the far low-C tail of the exact likelihood is
+steeper than lognormal (anti-conservative for lower limits — BJK's known
+limitation, driven by nu-heterogeneity within wide low-l bands; use
+narrower low-l bands if the deep tail matters). At high l the form
+converges to Gaussian, so compression only changes anything at large
+scales — QML territory.

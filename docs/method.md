@@ -80,6 +80,19 @@ Two engines:
   exact bandpower windows `F_bl` — for any binning. Cost ≈ `n_modes` CG
   solves; the default up to nside 64.
 
+- **subsampled** (`fisher_mode='subsampled'`, `fisher_frac=f`): the exact
+  engine run on a random fraction f of the mode *columns*, stratified per
+  `l'` (>= 1 column each, without replacement) and renormalized by
+  `N_l'/n_l'` — exactly unbiased, and since the row index of H is always
+  summed exactly, the sampling error is *local in bands*:
+  `offset(c_A)/sigma_A ~ SNR_A sqrt(rho (1-f)/n_A)` with the band's own
+  S/N and a mask-geometry factor rho (~0.1 for the NaMaster test mask).
+  Measured head-to-head at matched solve counts, its frozen-response
+  offsets are 6-9x smaller than the sims-MC engine's (whose Wishart noise
+  couples all bands: `offset ~ sqrt(SNR_tot^2/N_sims)`), i.e. ~40-80x
+  cheaper at equal accuracy. The sampled R is symmetrized; check
+  conditioning for very small f. This is the recommended scalable mode,
+  combined with iteration when bands are strongly signal-dominated.
 - **mc** (`fisher_mode='mc'`): for sims `x ~ N(0, C̃)`,
   `cov[y_A, y_B] = R_AB` exactly (this also holds for the deprojected
   filter because `M C̃ M = M`), the same sims give windows

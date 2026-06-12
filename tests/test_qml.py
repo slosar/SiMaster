@@ -179,3 +179,30 @@ def test_run_exact_matches_dense_reference():
     dR = np.abs(w.R_hat - R) / np.sqrt(np.outer(np.diag(R), np.diag(R)))
     assert dR.max() < 1e-8
     assert np.abs(w.n_hat - ex.noise_bias()).max() < 1e-8 * np.abs(ex.noise_bias()).max()
+
+
+@pytest.mark.slow
+def test_subsampled_response_unbiased():
+    """Column-subsampled response (stratified, 1/f-renormalized) is an
+    unbiased estimate of the exact one."""
+    f, b, cl, mask, ivar = setup_T()
+    cl_flat = b.unbin_cl(b.bin_cl(cl), LMAX); cl_flat[:2] = 0
+    w0 = sm.QMLWorkspace(f, b, {('t_0', 't_0'): cl_flat}, lmax=LMAX,
+                         fisher_mode="exact", verbose=False,
+                         deproject_low_ell=False)
+    w0.run_exact()
+    Rs, ns = [], []
+    for s in range(6):
+        w = sm.QMLWorkspace(f, b, {('t_0', 't_0'): cl_flat}, lmax=LMAX,
+                            fisher_mode="subsampled", verbose=False,
+                            deproject_low_ell=False)
+        w.run_exact(sample_frac=0.4, sample_seed=s)
+        Rs.append(w.R_hat); ns.append(w.n_hat)
+    Rm = np.mean(Rs, axis=0)
+    scale = np.sqrt(np.outer(np.diag(w0.R_hat), np.diag(w0.R_hat)))
+    # mean over 6 seeds approaches exact ~ sqrt(6) faster (Frobenius)
+    fro_mean = np.linalg.norm((Rm - w0.R_hat) / scale)
+    fro_one = np.median([np.linalg.norm((R - w0.R_hat) / scale) for R in Rs])
+    assert fro_mean < 0.75 * fro_one
+    assert (np.abs(Rm - w0.R_hat) / scale).max() < 0.05
+    assert np.abs(np.mean(ns, axis=0) - w0.n_hat).max() < 0.05 * np.abs(w0.n_hat).max()

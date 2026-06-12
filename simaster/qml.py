@@ -103,10 +103,11 @@ class QMLWorkspace:
     """
 
     def __init__(self, fields, bins: Bins, cl_fid, lmax=None, lmin=2,
-                 backend="auto", fisher_mode="auto", n_sims_fisher=2048,
-                 n_sims_noise=512, cg_tol=1e-5, cg_maxiter=700, seed=1234,
-                 template_alpha=None, deproject_low_ell=True, batch_size=256,
-                 cachedir=None, verbose=True):
+                 backend="auto", fisher_mode="auto", fisher_frac=0.25,
+                 n_sims_fisher=2048, n_sims_noise=512, cg_tol=1e-5,
+                 cg_maxiter=700, seed=1234, template_alpha=None,
+                 deproject_low_ell=True, batch_size=256, cachedir=None,
+                 verbose=True):
         if isinstance(fields, Field):
             fields = [fields]
         self.fields = fields
@@ -171,6 +172,7 @@ class QMLWorkspace:
                            and nmodes_tot <= max(40000, 2 * n_sims_fisher)
                            else "mc")
         self.fisher_mode = fisher_mode
+        self.fisher_frac = fisher_frac
         t0 = time.time()
         self.cov = CovModel(fields, clmat, self.index, backend=backend,
                             cachedir=cachedir)
@@ -253,23 +255,50 @@ class QMLWorkspace:
         return jnp.concatenate(ybs, axis=0), jnp.concatenate(yls, axis=0)
 
     # ----------------------------------------------------------- exact engine --
-    def run_exact(self):
-        """Deterministic response/noise-bias/window computation.
+    def run_exact(self, sample_frac=None, sample_seed=0):
+        """Deterministic (or column-subsampled) response computation.
 
-        Solves V = M G over all (comp, l, m) mode columns with batched CG
-        and accumulates the l-resolved response tensor
+        Solves V = M G over (comp, l, m) mode columns with batched CG and
+        accumulates the l-resolved response tensor
 
             T[a,b,c,d](l1,l2) = sum_{k in l1, k' in l2} H[ak,ck'] H[bk,dk'],
             H = G^T M G,
 
-        from which the exact binned response R, per-multipole windows F_bl
-        and noise bias n follow for any binning.  Cost: n_modes CG solves
+        from which the binned response R, per-multipole windows F_bl and
+        noise bias n follow for any binning.  Cost: n_columns CG solves
         (batched); memory: O(Nc^4 nl^2), never the dense H.
+
+        With ``sample_frac = f < 1`` only a random fraction of the k'
+        columns is solved -- stratified per l' (>= 1 column each, sampled
+        without replacement) and renormalized by N_l'/n_l', which keeps the
+        estimator exactly unbiased.  Because the row index of H is always
+        summed exactly (it comes from one adjoint SHT per solve), the
+        sampling noise is *local in bands*: the induced offset on band A is
+        ~ sigma_A * SNR_A * sqrt(rho (1-f)/n_A) with the band's own S/N,
+        in contrast to the sims-MC engine whose Wishart noise couples all
+        bands coherently (offset ~ sigma_A * sqrt(SNR_tot^2/N_sims)).
+        The sampled R is symmetrized; for very small f check its
+        conditioning.
         """
         self._prepare_deprojection()
         Nc, K = len(self.comp_names), self.index.nmodes
         nl = self.ls.size
         lmode = np.asarray(self.index.l) - self.lmin
+        # column selection (all modes, or stratified subsample per l)
+        if sample_frac is None or sample_frac >= 1.0:
+            sel = np.arange(K)
+            scale_l = np.ones(nl)
+        else:
+            rng = np.random.default_rng(sample_seed)
+            sel = []
+            scale_l = np.ones(nl)
+            for li in range(nl):
+                kl = np.flatnonzero(lmode == li)
+                n = max(1, int(round(sample_frac * kl.size)))
+                sel.append(rng.choice(kl, size=n, replace=False))
+                scale_l[li] = kl.size / n
+            sel = np.sort(np.concatenate(sel))
+        nsel = sel.size
         # T and W2d accumulate on device; transferred to host once at the end
         # (per-l host syncs dominated the runtime otherwise)
         T_dev = jnp.zeros((Nc, Nc, Nc, Nc, nl, nl))
@@ -278,11 +307,12 @@ class QMLWorkspace:
 
         J = max(1, self.batch_size // Nc)
         t0 = time.time()
-        for j0 in range(0, K, J):
-            jc = min(J, K - j0)
+        for j0 in range(0, nsel, J):
+            kcols = sel[j0:j0 + J]
+            jc = kcols.size
             # one-hot mode batches: columns ordered (k major, comp minor)
             E = jnp.zeros((Nc, K, jc * Nc))
-            kk = jnp.repeat(jnp.arange(j0, j0 + jc), Nc)
+            kk = jnp.repeat(jnp.asarray(kcols), Nc)
             cc = jnp.tile(jnp.arange(Nc), jc)
             E = E.at[cc, kk, jnp.arange(jc * Nc)].set(1.0)
             Gc = self.cov.from_modes(E)
@@ -290,10 +320,10 @@ class QMLWorkspace:
             A = self.cov.to_modes(V)                      # (Nc, K, jc*Nc)
             H = A.reshape(Nc, K, jc, Nc).transpose(0, 1, 3, 2)  # (a,k,c',j)
             Vr = V.reshape(-1, jc, Nc)
-            W2d_dev = W2d_dev.at[:, :, j0:j0 + jc].add(
+            W2d_dev = W2d_dev.at[:, :, jnp.asarray(kcols)].add(
                 jnp.einsum("pjc,p,pjd->cdj", Vr, noisevar, Vr))
             # accumulate T: loop over row-l blocks, all on device
-            lj = jnp.asarray(lmode[j0:j0 + jc])
+            lj = jnp.asarray(lmode[kcols])
             for l1 in range(nl):
                 sl = self.index.band_slice(l1 + self.lmin, l1 + self.lmin)
                 Hl = H[:, sl.start:sl.stop]               # (a, kl, c', j)
@@ -303,10 +333,11 @@ class QMLWorkspace:
                 T_dev = T_dev.at[:, :, :, :, l1, :].add(
                     Xl.transpose(1, 2, 3, 4, 0))
             if self.verbose and (j0 // J) % 8 == 0:
-                self._log(f"exact response {j0 + jc}/{K} modes "
+                self._log(f"exact response {j0 + jc}/{nsel} columns "
                           f"(cg {self.last_cg[0]} it)")
-        T = np.asarray(T_dev)
-        W2d = np.asarray(W2d_dev)
+        # stratified-subsample renormalization (no-op when all columns run)
+        T = np.asarray(T_dev) * scale_l[None, None, None, None, None, :]
+        W2d = np.asarray(W2d_dev) * scale_l[lmode][None, None, :]
 
         # ---- assemble response / windows / noise bias -----------------------
         ns = len(self.spec_pairs)
@@ -332,7 +363,10 @@ class QMLWorkspace:
         Rb = np.zeros((ns, nbb, ns, nbb))
         for b in range(nbb):
             Rb[:, :, :, b] = Fb[:, :, :, band_of_l == b].sum(axis=3)
-        self.R_hat = Rb.reshape(ns * nbb, ns * nbb)
+        R = Rb.reshape(ns * nbb, ns * nbb)
+        # column subsampling breaks exact symmetry; symmetrizing averages
+        # two semi-independent estimates (harmless no-op for the full run)
+        self.R_hat = 0.5 * (R + R.T)
 
         n_l = np.zeros((ns, nl))
         for A, (c, d) in enumerate(self.spec_pairs):
@@ -349,7 +383,8 @@ class QMLWorkspace:
         self.ybar_fid = None
         self._mc_done = True
         self._log(f"exact response done in {(time.time() - t0) / 60:.1f} min "
-                  f"({K} modes, condition {np.linalg.cond(self.R_hat):.2e})")
+                  f"({nsel}/{K} columns, "
+                  f"condition {np.linalg.cond(self.R_hat):.2e})")
 
     # ------------------------------------------------------------- MC engine --
     def run_mc(self, n_sims_fisher=None, n_sims_noise=None):
@@ -423,6 +458,8 @@ class QMLWorkspace:
         if not self._mc_done:
             if self.fisher_mode == "exact":
                 self.run_exact()
+            elif self.fisher_mode == "subsampled":
+                self.run_exact(sample_frac=self.fisher_frac)
             else:
                 self.run_mc()
         if data is None:

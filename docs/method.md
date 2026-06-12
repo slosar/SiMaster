@@ -157,3 +157,23 @@ Two equivalent prescriptions (validated against each other):
 5. Window functions: with a curved input spectrum, compare estimates to
    `QMLWorkspace.predict(cl_theory)` (window-convolved), not to naively
    binned theory.
+
+## The around-fiducial (sim-debiased) estimator
+
+With a stochastic response matrix (subsampled or MC engines), the plain
+estimator `ĉ = R̂⁻¹(ŷ − n̂)` carries a frozen bias `R⁻¹δR̂·c_true` for *any*
+fiducial. The around-fiducial form
+
+```
+ĉ = c_fid + R̂⁻¹( ŷ(d) − ⟨ŷ⟩_fid-sims )      (QMLWorkspace.run_mean_debias)
+```
+
+uses the mean of ŷ over ~1/ε² (~100) independent fiducial sims, which has
+expectation `R_true·c_fid + n_true` with the *exact* response of the actual
+filter — so the R̂ error multiplies `(c_true − c_fid)` instead of `c_true`
+(verified: a 20%-wrong fiducial deflates subsampled offsets by exactly the
+predicted ×5). Combined with one `iterate()` re-centering this is what makes
+stochastic response engines viable for signal-dominated data; see the report
+for the Planck-scale budget. The fiducial bandpowers used in this form are
+band means of the fiducial spectra — exact when the fiducial is band-flat
+(which `update_fiducial` guarantees).

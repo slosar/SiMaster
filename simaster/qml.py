@@ -438,6 +438,38 @@ class QMLWorkspace:
                   f"(R condition {np.linalg.cond(self.R_hat):.2e}, hartlap {h:.3f})")
 
     # ------------------------------------------------------------- estimation --
+    def run_mean_debias(self, n_sims=128):
+        """Mean of y over independent fiducial sims, for the around-fiducial
+        (sim-debiased) estimator
+
+            c_hat = c_fid + R^-1 (y(d) - <y>_fid sims).
+
+        The mean carries the *exact* response of the actual filter, so a
+        stochastic R-hat error only multiplies (c_true - c_fid) instead of
+        c_true -- essential when R comes from the 'subsampled' or 'mc'
+        engines on signal-dominated data.  Mean error ~ sigma/sqrt(n_sims)
+        per band, so n_sims ~ 1/eps^2 (~100) suffices.
+        """
+        nb = self.bins.nbands * len(self.spec_pairs)
+        s = np.zeros(nb)
+        done = 0
+        while done < n_sims:
+            B = min(self.batch_size, n_sims - done)
+            x = self.cov.sample(self._next_key(), B)
+            yb, _ = self._y_stats(self._filter(x))
+            s += np.asarray(yb).sum(1)
+            done += B
+        self.ybar_debias = s / n_sims
+        self.n_mean_sims = n_sims
+
+    def fiducial_bandpowers(self):
+        """Band means of the current fiducial spectra (exact if band-flat,
+        e.g. after update_fiducial)."""
+        out = np.zeros((len(self.spec_pairs), self.bins.nbands))
+        for si, (i, j) in enumerate(self.spec_pairs):
+            out[si] = self.bins.bin_cl(self.cov.clmat[i, j])
+        return out.reshape(-1)
+
     def pack_data(self, maps_per_field):
         """Full-sky maps [[m] or [Q,U] per field] -> data matrix (nrow, B)."""
         import healpy as hp
@@ -468,7 +500,13 @@ class QMLWorkspace:
         elif isinstance(data, (list, tuple)):
             data = self.pack_data(data)
         yd, _ = self._y_stats(self._filter(data))
-        c_full = self.R_inv @ (np.asarray(yd) - self.n_hat[:, None])  # (nb, B)
+        if getattr(self, "ybar_debias", None) is not None:
+            # around-fiducial form: response error multiplies (c - c_fid)
+            c_full = (self.fiducial_bandpowers()[:, None]
+                      + self.R_inv @ (np.asarray(yd)
+                                      - self.ybar_debias[:, None]))
+        else:
+            c_full = self.R_inv @ (np.asarray(yd) - self.n_hat[:, None])
         self._last_c_full = c_full
         return self._package(c_full, self.R_inv)
 
@@ -521,6 +559,7 @@ class QMLWorkspace:
         clmat = psd_floor(clmat)
         self.cov.set_clmat(clmat)
         self._mc_done = False
+        self.ybar_debias = None  # stale: tied to the previous fiducial
 
     def iterate(self, data=None, n_iter=2):
         """Newton-Raphson-style iteration: re-center fiducial on estimates.

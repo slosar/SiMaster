@@ -1,0 +1,39 @@
+
+Measured on this machine (GPU: cuda:0, 24-core CPU), validation
+configuration ($N_{\rm side}=32$, $\ell_{\max}=3N_{\rm side}-1$,
+$T$+$E$/$B$, NaMaster mask, batch 64):
+
+\begin{table}[h]\centering\small
+\begin{tabular}{lrrrrr}
+\toprule
+backend & setup [s] & $\mathbb{C}x$ batch [ms] & CG iters & solve [s] & $G$ mem [GB] \\
+\midrule
+dense (GPU GEMM) & 1.1 & 432 & 33 & 37.3 & 1.78 \\
+ducc (CPU SHT)   & 0.0 & 111 & 33 & 6.6 & -- \\
+\bottomrule
+\end{tabular}
+\caption{Cost drivers at $N_{\rm side}=32$.}
+\end{table}
+
+\paragraph{$N_{\rm side}=1024$ projection (ducc backend, $\ell_{\max}=2048$,
+$f_{\rm sky}=0.39$).}
+Data vector $3N_{\rm obs} \approx 14.8$M;
+$N_{\rm modes} \approx 12.6$M (so the exact response
+engine is out of reach --- MC or iteration is mandatory).
+A batch of 64 RHS holds $\sim$5 CG state vectors:
+37.9 GB of GPU RAM at float64, plus order-100 MB of
+spectra/precondition tables --- \textbf{a 24--40 GB GPU is sufficient for
+the solver itself}; the hypothetical dense-$G$ backend would need
+1492.0 TB and is firmly excluded.
+One covariance application (batched SHTs at $\ell_{\max}=2048$ on 24 CPU
+cores) costs $\sim$3646\,s per batch of
+64 (naive $N_{\rm side}^3$ extrapolation from 32 (pessimistic, overhead-dominated)), i.e.\ a CG solve of 64 RHS in
+$\sim$2005 min; $10^5$ MC sims for the response matrix
+would cost $\sim$52226 h of CPU-SHT
+time.  The honest conclusion: at $N_{\rm side}=1024$ the SHT, not the GPU
+linear algebra, is the bottleneck; a GPU SHT (the \texttt{sht} backend
+interface is ready) or a CPU farm for the transform stage is the upgrade
+path.  Per-realization estimation (one solve) is entirely tractable
+($\sim$31.3 min/realization equivalent);
+it is the response matrix that sets the budget, and it is computed once
+per mask/fiducial.

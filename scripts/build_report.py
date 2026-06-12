@@ -186,10 +186,123 @@ per mask/fiducial.
     return txt
 
 
+def fisher_methods_section():
+    """Fisher engines compared + cost to not degrade a Planck-like analysis."""
+    # per-solve cost: 2 SHT pairs (spin0 + spin2) per C-apply, ~100 CG iters
+    shtb = jload("bench_sht.json")
+    ncores = os.cpu_count() or 24
+    if shtb and "1024" in shtb:
+        s0, s2 = shtb["1024"]["spin0_B8"], shtb["1024"]["spin2_B8"]
+        apply_core_s = (s0["synth_s"] + s0["adjoint_s"]
+                        + s2["synth_s"] + s2["adjoint_s"]) / 8.0 * ncores
+        src = "measured on this machine's 24-core CPU (ducc0)"
+    else:
+        apply_core_s = 26.0
+        src = "estimated from typical ducc0 throughput (to be replaced by "\
+              "the measured value once \\texttt{bench\\_sht\\_scaling.py} has run)"
+    iters = 100
+    solve_core_h = apply_core_s * iters / 3600.0
+
+    # Planck-like budget numbers
+    snr2_tot = 1.0e6
+    eps = 0.1
+    rho, fsky, dl = 0.1, 0.6, 30
+    nbands = 2000 // dl
+    ncols_cov = 250 * nbands * 3
+    n_exact = 3 * (2001 ** 2)
+    n_mc_naive = snr2_tot / eps ** 2
+    n_mc_fid = nbands * 6 / eps ** 2          # SNR_eff^2 ~ n_bands(x6 spectra)
+    f_noiter = rho * fsky / (2 * eps ** 2)
+    f_noiter = f_noiter / (1 + f_noiter)
+
+    def ch(n):  # core-hours -> pretty
+        v = n * solve_core_h
+        return f"{v:,.0f}".replace(",", r"\,")
+
+    return f"""
+The response (binned Fisher) matrix $R_{{AB}}=\\frac12\\Tr[MP_AMP_B]$ is the
+only piece of the QML pipeline whose cost grows faster than one solve per
+data vector, so the engine choice decides feasibility at high resolution.
+\\simaster\\ implements three engines (\\S\\ref{{sec:fisher}}); their error
+budgets differ qualitatively:
+
+\\begin{{itemize}}
+\\item \\textbf{{Exact}}: all $N_{{\\rm modes}}$ columns of $MG$ solved;
+  deterministic. Cost $N_{{\\rm modes}}$ CG solves.
+\\item \\textbf{{Column-subsampled exact}} (fraction $f$, stratified per
+  $\\ell'$, $N_{{\\ell'}}/n_{{\\ell'}}$-renormalized; exactly unbiased): the
+  row index of $H$ is summed exactly, so the response error is local in
+  bands, $\\delta c_A/\\sigma_A \\simeq \\mathrm{{SNR}}_A
+  \\sqrt{{\\rho(1-f)/n_A}}$, with $\\rho\\simeq0.1$ measured for the
+  NaMaster mask.
+\\item \\textbf{{Sims-MC}} ($\\mathrm{{cov}}[\\hat y]$ over $N_{{\\rm sims}}$
+  fiducial sims): Wishart noise couples all bands,
+  $\\delta c_A/\\sigma_A \\simeq \\sqrt{{\\mathrm{{SNR}}^2_{{\\rm tot}}/
+  N_{{\\rm sims}}}}$ with $\\mathrm{{SNR}}^2_{{\\rm tot}}=c^{{\\sf T}}Rc$.
+\\end{{itemize}}
+
+\\paragraph{{Requirement.}} We demand that the Fisher-induced systematic not
+dominate the error budget: offset $\\le \\epsilon\\,\\sigma_A$ per band with
+$\\epsilon=0.1$ (error-bar inflation $<0.5\\%$); all counts below scale as
+$1/\\epsilon^2$.
+
+\\paragraph{{Planck-like configuration.}} $N_{{\\rm side}}=1024$,
+$\\ell_{{\\max}}=2000$, $T/E/B$, $f_{{\\rm sky}}\\simeq{fsky}$,
+TT signal-dominated to $\\ell\\sim1500$, hence
+$\\mathrm{{SNR}}^2_{{\\rm tot}}\\approx10^6$ and
+$N_{{\\rm modes}}=3(\\ell_{{\\max}}+1)^2\\approx1.2\\times10^7$.
+One $\\C$-apply costs {apply_core_s:.0f} core-s ({src}); with
+$\\sim$entire-mission anisotropic noise we budget {iters} CG iterations,
+i.e.\\ {solve_core_h:.2f} core-h per solve.
+
+\\begin{{table}}[h]\\centering\\small
+\\begin{{tabular}}{{lrr}}
+\\toprule
+engine & solves needed & CPU cost [core-h] \\\\
+\\midrule
+exact (all columns) & $1.2\\times10^7$ & {ch(n_exact)} \\\\
+sims-MC, no iteration & $\\mathrm{{SNR}}^2_{{\\rm tot}}/\\epsilon^2
+  = 10^8$ & {ch(n_mc_naive)} \\\\
+subsampled, no iteration & $f\\ge{f_noiter:.2f}$ of all columns &
+  {ch(f_noiter * n_exact)} \\\\
+\\textbf{{subsampled + iteration}} & $\\sim250$ cols/band
+  $\\to {ncols_cov:,.0f}$\\hspace{{-2mm}} & \\textbf{{{ch(ncols_cov)}}} \\\\
+sims-MC + iteration & $\\sim{n_mc_fid:,.0f}$ & {ch(n_mc_fid)} \\\\
+\\bottomrule
+\\end{{tabular}}
+\\caption{{Fisher cost for a Planck-like analysis at
+$\\epsilon=0.1$. ``+ iteration'' assumes a fiducial good to
+$\\sim1\\sigma$ per band (one Newton--Raphson re-centering; trivially true
+for Planck's $\\Lambda$CDM), which deflates the bias requirement so the
+budget is set by getting the \\emph{{covariance}} $R^{{-1}}$ itself to
+$\\sim$2\\% ($n_A\\ge\\rho/2(0.01)^2\\approx250$ columns per band,
+$\\Delta\\ell={dl}$, 3 components).}}
+\\end{{table}}
+
+Without iteration, neither stochastic engine is affordable for
+signal-dominated data: the subsampling fraction obeys
+$f/(1-f)\\ge\\rho f_{{\\rm sky}}(S/(S+N))^2/2\\epsilon^2$ --- note the band
+width cancels --- giving $f\\simeq{f_noiter:.2f}$, while sims-MC needs
+$10^8$ solves.  With a good fiducial plus one iteration the offset
+multiplies $(c-c_{{\\rm fid}})$ instead of $c$ and both engines drop to
+$\\mathcal{{O}}(5\\times10^4)$ solves: about {ch(ncols_cov)} core-h
+($\\approx${ncols_cov * solve_core_h / 24 / 256:.0f} days on a 256-core
+farm), or $\\sim$1 week on a single A100-class GPU once a GPU SHT backend
+exists ($\\sim$0.15\\,s per $\\C$-apply), with $\\sim$38\\,GB of GPU RAM at
+batch 64.  The noise bias never matters: Rademacher probes have
+per-probe scatter equal to the per-realization $\\sigma_A$, so
+$1/\\epsilon^2=100$ probes suffice.  We therefore consider the Planck
+configuration feasible with the subsampled engine + iteration on a
+mid-size CPU farm today, and on a single node with a GPU SHT.
+"""
+
+
 with open(os.path.join(REPORT, "validation_section.tex"), "w") as f:
     f.write(validation_section())
 with open(os.path.join(REPORT, "feasibility_section.tex"), "w") as f:
     f.write(feasibility_section())
+with open(os.path.join(REPORT, "fisher_methods_section.tex"), "w") as f:
+    f.write(fisher_methods_section())
 
 for _ in range(3):
     r = subprocess.run(["pdflatex", "-interaction=nonstopmode", "main.tex"],

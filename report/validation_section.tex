@@ -1,0 +1,27 @@
+All suites: $N_{\rm side}=32$, $\ell_{\max}=64=2N_{\rm side}$ (chosen for the 6\,GB GPU shared with the desktop session; pass \texttt{--lmax 95} on a bigger card), $\sigma_T=50\,\mu$K (S/N per mode crosses unity at $\ell\approx49$), bands of $\Delta\ell=8$ over $2\le\ell\le64$, 100 data realizations at fixed mask (= fixed Fisher), exact response engine, six spectra estimated jointly (TT, EE, BB, TE, TB, EB or the LSS analogues), monopole/dipole of spin-0 fields deprojected.  Two input-spectrum variants per suite: \emph{flat} (data generated from band-flat spectra; the estimates must match the input bandpowers exactly, with no window ambiguity) and \emph{curved} (original spectra; compared to the window-convolved prediction).  The $\chi^2$ is that of the full bandpower vector against the target using the QML covariance $R^{-1}$.
+\begin{table}[h]\centering\small
+\begin{tabular}{llrrrrr}
+\toprule
+suite & variant & $\langle\chi^2\rangle$ & dof & KS $p$ & pull mean & pull std \\
+\midrule
+val1 & flat & 45.3 & 48 & 0.009 & +0.004 & 0.972 \\
+val1 & curved & 48.2 & 48 & 0.712 & -0.005 & 1.001 \\
+\bottomrule
+\end{tabular}
+\caption{Validation summary.  The KS $p$-value compares the per-realization $\chi^2$ values to the $\chi^2_{\rm dof}$ distribution; pulls are per-band normalized residuals over all spectra, bands and realizations (expected: mean 0, std 1).}
+\end{table}
+
+\subsection{Test 1: CMB $T/Q/U$, NaMaster mask, uniform noise ($\sigma_T=50\,\mu$K/pix, $\sigma_P=\sqrt2\sigma_T$)}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_flat_spectra.png}\caption{val1 (flat): recovered bandpowers.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_flat_chi2.png}\caption{val1 (flat): $\chi^2$ distribution.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_flat_pulls.png}\caption{val1 (flat): pull distribution.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_curved_spectra.png}\caption{val1 (curved): recovered bandpowers.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_curved_chi2.png}\caption{val1 (curved): $\chi^2$ distribution.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_curved_pulls.png}\caption{val1 (curved): pull distribution.}\end{figure}
+\clearpage
+
+\subsection{Column-subsampled response (stochastic exact engine)}
+A third response engine solves only a random fraction $f$ of the mode columns of $MG$, stratified per $\ell'$ and renormalized by $N_{\ell'}/n_{\ell'}$ (exactly unbiased; sampling without replacement makes it continuously exact as $f\to1$).  Because the row index of $H$ is summed exactly for every solved column, the sampling error stays \emph{local in bands}: $\delta c_A/\sigma_A \sim \mathrm{SNR}_A\sqrt{\rho(1-f)/n_A}$ with the band's own S/N, versus the coherent $\sqrt{\mathrm{SNR}^2_{\rm tot}/N_{\rm sims}}$ of the sims-MC engine.  Measured head-to-head ($N_{\rm side}=8$, signal-dominated, $\sim$110 solves each): frozen-response offsets of 0.13--0.18$\sigma$ (subsampled, $f=0.25$) versus 0.7--1.6$\sigma$ (sims-MC) --- a 6--9$\times$ accuracy gain at equal cost, i.e.\ $\mathcal{O}(50\times)$ fewer solves at equal accuracy.  This is the recommended engine at scales where the full exact run is unaffordable, combined with iteration for strongly signal-dominated bands.
+
+\subsection{Optimality vs pseudo-$C_\ell$}
+On 100 common realizations (spin-0 CMB-like field, $N_{\rm side}=16$, same mask and bins; \texttt{notebooks/simaster\_vs\_namaster.ipynb}) the empirical QML error bars are $0.38\times$, $0.52\times$ and $0.78\times$ the NaMaster pseudo-$C_\ell$ ones in the three lowest bands, converging to unity at $\ell\gtrsim25$, and the predicted QML covariance matches the empirical scatter at the few-percent level.

@@ -177,3 +177,20 @@ stochastic response engines viable for signal-dominated data; see the report
 for the Planck-scale budget. The fiducial bandpowers used in this form are
 band means of the fiducial spectra — exact when the fiducial is band-flat
 (which `update_fiducial` guarantees).
+
+## Field-level likelihood, score, and autodiff
+
+`simaster.score` exposes the exact-likelihood view. The quadratic term
+`-1/2 d^T C^-1 d` is differentiable through the CG solve with
+`lax.custom_linear_solve` (implicit differentiation: the backward pass is
+one extra solve), and `jax.grad` of it w.r.t. the bandpowers reproduces the
+QML statistic `y_A` to machine precision (tested). The log-det term never
+needs evaluating: its gradient `-1/2 Tr[C^-1 P_A]` is a single-solve
+Hutchinson trace satisfying `1/2 Tr[C^-1 P_A] = n_A + (R c_fid)_A`, so the
+full score is `y - n - R c_fid` — QML is the Newton step on this likelihood.
+Second derivatives do *not* get cheaper via autodiff (the Hessian is the
+double-solve trace; one solve per band per probe), so the subsampled-column
+engine remains the Fisher method of choice; Hessian-*vector* products cost
+~2 solves and enable truncated-Newton optimization or HMC over bandpowers,
+and gradients w.r.t. any upstream parametrization (cosmological parameters,
+calibration, beams) chain through `clmat` for free.

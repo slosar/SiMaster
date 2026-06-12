@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.simaster_cache/
+report/figs/
+report/data/
+report/*.aux
+report/*.log
+report/*.out
+report/*.toc
+report/*.pdf
+.pytest_cache/
+.ipynb_checkpoints/

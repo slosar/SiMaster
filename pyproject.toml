@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simaster"
+version = "0.1.0"
+description = "QML (quadratic maximum likelihood) power spectrum estimation on the sphere, GPU-accelerated via JAX, with a NaMaster-like interface"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BSD-3-Clause" }
+authors = [{ name = "Anze Slosar" }]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "jax>=0.4.30",
+    "healpy>=1.16",
+    "ducc0>=0.34",
+]
+
+[project.optional-dependencies]
+gpu = ["jax[cuda12]"]
+healsparse = ["healsparse"]
+test = ["pytest", "pytest-cov"]
+validation = ["pyccl", "matplotlib", "pymaster"]
+
+[tool.setuptools.packages.find]
+include = ["simaster*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+markers = ["slow: heavy statistical tests, excluded in CI"]

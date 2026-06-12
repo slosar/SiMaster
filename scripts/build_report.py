@@ -99,6 +99,22 @@ def feasibility_section():
     if b is None:
         return "Benchmarks not yet run.\n"
     d, c, p = b["dense"], b["ducc"], b["projection_1024"]
+    shtb = jload("bench_sht.json")
+    note = ("naive $N_{\\rm side}^3$ extrapolation from 32 (pessimistic, "
+            "overhead-dominated)")
+    if shtb and "1024" in shtb:
+        # replace the cubic extrapolation with measured nside=1024 SHTs:
+        # one C-apply per RHS = (spin0 + spin2) x (synth + adjoint)
+        s0, s2 = shtb["1024"]["spin0_B8"], shtb["1024"]["spin2_B8"]
+        per_rhs = (s0["synth_s"] + s0["adjoint_s"]
+                   + s2["synth_s"] + s2["adjoint_s"]) / 8.0
+        p = dict(p)
+        p["t_apply_s_extrapolated"] = per_rhs * d["batch"]
+        p["t_solve_s"] = p["t_apply_s_extrapolated"] * c["cg_iters"]
+        note = ("\\emph{measured} full-sky ducc transforms at "
+                "$N_{\\rm side}=1024$, $\\ell_{\\max}=2048$ "
+                f"({per_rhs:.1f}\\,s per RHS per $\\mathbb{{C}}$-apply on "
+                "this CPU)")
     txt = f"""
 Measured on this machine (GPU: {b['device']}, 24-core CPU), validation
 configuration ($N_{{\\rm side}}={b['nside']}$, $\\ell_{{\\max}}=3N_{{\\rm side}}-1$,
@@ -127,8 +143,8 @@ spectra/precondition tables --- \\textbf{{a 24--40 GB GPU is sufficient for
 the solver itself}}; the hypothetical dense-$G$ backend would need
 {p['dense_G_GB']/1e3:.1f} TB and is firmly excluded.
 One covariance application (batched SHTs at $\\ell_{{\\max}}=2048$ on 24 CPU
-cores) extrapolates to $\\sim${p['t_apply_s_extrapolated']:.0f} s per batch,
-i.e.\\ a CG solve of {d['batch']} RHS in
+cores) costs $\\sim${p['t_apply_s_extrapolated']:.0f}\\,s per batch of
+{d['batch']} ({note}), i.e.\\ a CG solve of {d['batch']} RHS in
 $\\sim${p['t_solve_s']/60:.0f} min; $10^5$ MC sims for the response matrix
 would cost $\\sim${p['t_solve_s']*100000/d['batch']/3600:.0f} h of CPU-SHT
 time.  The honest conclusion: at $N_{{\\rm side}}=1024$ the SHT, not the GPU

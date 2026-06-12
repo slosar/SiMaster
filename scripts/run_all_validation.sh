@@ -15,11 +15,11 @@ run() {
   tail -3 "$LOG/$name.log"
 }
 
-run bench    bench_feasibility.py
-run val1     val1_cmb.py
-run val2     val1_cmb.py --ivar-maker val2_ivar.py --tag val2
-run val3     val3_lss.py
+run bench    bench_feasibility.py --lmax 95 --batch 64
+run val1     val1_cmb.py --lmax 64 --sigma-T 50
+run val2     val1_cmb.py --lmax 64 --sigma-T 50 --ivar-maker val2_ivar.py --tag val2
+run val3     val3_lss.py --lmax 64
 run val4     val4_iterate.py
-run val1_mc  val1_cmb.py --fisher mc --nsims 8192 --tag val1_mc
+run val1_mc  val1_cmb.py --lmax 64 --sigma-T 50 --fisher mc --nsims 8192 --tag val1_mc
 run report   build_report.py
 echo "ALL DONE $(date)"

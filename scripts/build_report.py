@@ -22,7 +22,7 @@ def validation_section():
     out = []
     setup = {
         "val1": ("CMB $T/Q/U$, NaMaster mask, uniform noise "
-                 "($\\sigma_T=30\\,\\mu$K/pix, $\\sigma_P=\\sqrt2\\sigma_T$)"),
+                 "($\\sigma_T=50\\,\\mu$K/pix, $\\sigma_P=\\sqrt2\\sigma_T$)"),
         "val2": ("as test 1, but ivar in 8 longitude strips with the noise "
                  "r.m.s.\\ alternating by a factor of 2 across the observed "
                  "region"),
@@ -31,8 +31,11 @@ def validation_section():
                  "noise 0.3), \\texttt{pyccl} theory"),
     }
     out.append(
-        "All suites: $N_{\\rm side}=32$, $\\ell_{\\max}=95$, bands of "
-        "$\\Delta\\ell=8$ over $2\\le\\ell\\le95$, 100 data realizations at "
+        "All suites: $N_{\\rm side}=32$, $\\ell_{\\max}=64=2N_{\\rm side}$ "
+        "(chosen for the 6\\,GB GPU shared with the desktop session; pass "
+        "\\texttt{--lmax 95} on a bigger card), $\\sigma_T=50\\,\\mu$K "
+        "(S/N per mode crosses unity at $\\ell\\approx49$), bands of "
+        "$\\Delta\\ell=8$ over $2\\le\\ell\\le64$, 100 data realizations at "
         "fixed mask (= fixed Fisher), exact response engine, six spectra "
         "estimated jointly (TT, EE, BB, TE, TB, EB or the LSS analogues), "
         "monopole/dipole of spin-0 fields deprojected.  Two input-spectrum "
@@ -82,7 +85,7 @@ def validation_section():
         out.append(
             "\n\\subsection{Exact vs Monte-Carlo response}\n"
             "Repeating test 1 with the MC engine "
-            f"($N_{{\\rm sims}}=16384$) gives $\\langle\\chi^2\\rangle = "
+            f"($N_{{\\rm sims}}=8192$) gives $\\langle\\chi^2\\rangle = "
             f"{mc['flat']['chi2_mean']:.1f}$ (dof {mc['flat']['dof']}) for "
             "the flat variant, illustrating the frozen-$\\hat R$ S/N "
             "penalty discussed in \\S\\ref{sec:fisher}; the two engines "

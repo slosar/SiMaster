@@ -30,7 +30,8 @@ from simaster.cg import solve_C
 
 P = argparse.ArgumentParser()
 P.add_argument("--nside", type=int, default=32)
-P.add_argument("--batch", type=int, default=256)
+P.add_argument("--batch", type=int, default=128)
+P.add_argument("--lmax", type=int, default=None)
 P.add_argument("--full", action="store_true",
                help="also run a full small estimation for end-to-end timing")
 args = P.parse_args()
@@ -50,7 +51,7 @@ def timeit(fn, n=3):
 
 for backend in ("dense", "ducc"):
     nside = args.nside
-    lmax = 3 * nside - 1
+    lmax = args.lmax or 3 * nside - 1
     npix = hp.nside2npix(nside)
     mask = load_mask(nside)
     ivar = np.full(npix, 1.0 / 900.0)

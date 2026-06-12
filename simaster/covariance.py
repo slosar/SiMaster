@@ -176,7 +176,9 @@ class CovModel:
         """(ncomp*nobs, B) -> (ncomp, K, B) for field i (Y^T W x done outside)."""
         f = self.fields[i]
         if self.backend == "dense":
-            a = self.Y[i].T @ xf
+            # (x^T Y)^T, not Y^T x: XLA would otherwise materialize a
+            # transposed copy of Y (GBs) during autotuning
+            a = (xf.T @ self.Y[i]).T
         else:
             shape = jax.ShapeDtypeStruct((f.ncomp * self.K, xf.shape[-1]),
                                          xf.dtype)

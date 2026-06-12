@@ -32,6 +32,7 @@ P.add_argument("--nlb", type=int, default=8)
 P.add_argument("--ngal-arcmin2", type=float, default=15.0)
 P.add_argument("--shape-noise", type=float, default=0.3)
 P.add_argument("--fisher", default="exact", choices=["exact", "mc"])
+P.add_argument("--batch", type=int, default=128)
 P.add_argument("--quick", action="store_true")
 P.add_argument("--tag", default="val3")
 args = P.parse_args()
@@ -92,7 +93,7 @@ for variant in ("flat", "curved"):
                         fisher_mode=args.fisher,
                         n_sims_fisher=args.nsims,
                         n_sims_noise=max(1024, args.nsims // 4),
-                        batch_size=256, seed=777, cachedir=CACHEDIR)
+                        batch_size=args.batch, seed=777, cachedir=CACHEDIR)
     w.run_exact() if args.fisher == 'exact' else w.run_mc()
 
     maps_g, maps_s = [], []

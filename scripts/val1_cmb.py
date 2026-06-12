@@ -34,6 +34,7 @@ P.add_argument("--nlb", type=int, default=8)
 P.add_argument("--sigma-T", type=float, default=30.0,
                help="white noise per pixel, uK")
 P.add_argument("--fisher", default="exact", choices=["exact", "mc"])
+P.add_argument("--batch", type=int, default=128)
 P.add_argument("--quick", action="store_true", help="small fast config")
 P.add_argument("--ivar-maker", default=None,
                help="python file providing make_ivar(nside, mask) "
@@ -83,7 +84,7 @@ for variant in ("flat", "curved"):
                         fisher_mode=args.fisher,
                         n_sims_fisher=args.nsims,
                         n_sims_noise=max(1024, args.nsims // 4),
-                        batch_size=256, seed=999, cachedir=CACHEDIR)
+                        batch_size=args.batch, seed=999, cachedir=CACHEDIR)
     w.run_exact() if args.fisher == 'exact' else w.run_mc()
 
     # 100 data realizations (fixed mask, fixed Fisher)

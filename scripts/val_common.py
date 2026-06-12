@@ -3,8 +3,12 @@
 import os
 import sys
 
-# must be set before jax initializes: the desktop occupies part of the GPU
+# must be set before jax initializes: the desktop occupies part of the GPU,
+# and XLA's GEMM autotuner profiles kernels with an extra operand copy
+# (>1 GB for the dense synthesis matrices) -- disable it
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+os.environ["XLA_FLAGS"] = (os.environ.get("XLA_FLAGS", "")
+                           + " --xla_gpu_autotune_level=0").strip()
 
 import numpy as np
 import healpy as hp

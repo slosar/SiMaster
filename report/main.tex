@@ -111,8 +111,10 @@ $\sim$2--3$\times$ more.
 
 \subsection{Response matrix, noise bias, windows}
 \label{sec:fisher}
-Two engines, validated against each other and against a brute-force dense
-reference at small $N_{\rm side}$:
+Three engines, validated against each other and against a brute-force dense
+reference at small $N_{\rm side}$ (the third, column-subsampled exact
+engine, is described with measurements in \S\ref{sec:validation} and
+costed in \S\ref{sec:fishercost}):
 
 \paragraph{Exact (default for $N_{\rm side}\lesssim 64$).}  Solving
 $V = M G$ for all $N_{\rm modes}$ columns of $G=U$ (batched CG; never

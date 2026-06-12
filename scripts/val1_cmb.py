@@ -40,6 +40,11 @@ P.add_argument("--ivar-maker", default=None,
                help="python file providing make_ivar(nside, mask) "
                     "(used by val2)")
 P.add_argument("--tag", default="val1")
+P.add_argument("--variants", default="flat,curved")
+P.add_argument("--data-seed", type=int, default=20260612)
+P.add_argument("--reuse-response", action="store_true",
+               help="load checkpointed exact response (deterministic) "
+                    "and only redo the data estimation")
 args = P.parse_args()
 
 if args.quick:
@@ -48,7 +53,7 @@ if args.quick:
 nside = args.nside
 lmax = args.lmax or 3 * nside - 1
 npix = hp.nside2npix(nside)
-rng = np.random.default_rng(20260612)
+rng = np.random.default_rng(args.data_seed)
 
 cls_in = load_cmb_cls(lmax)
 mask = load_mask(nside)
@@ -67,7 +72,7 @@ ivar_P = ivar_T / 2.0  # Q,U noise = sqrt(2) x T, as usual
 bins = sm.Bins.linear(2, lmax, args.nlb)
 results = {}
 
-for variant in ("flat", "curved"):
+for variant in args.variants.split(","):
     t0 = time.time()
     cls_v = dict(cls_in)
     if variant == "flat":
@@ -85,7 +90,19 @@ for variant in ("flat", "curved"):
                         n_sims_fisher=args.nsims,
                         n_sims_noise=max(1024, args.nsims // 4),
                         batch_size=args.batch, seed=999, cachedir=CACHEDIR)
-    w.run_exact() if args.fisher == 'exact' else w.run_mc()
+    ckpt = os.path.join(DATADIR, f"resp_{args.tag}_{variant}.npz")
+    if args.reuse_response and os.path.exists(ckpt) and args.fisher == "exact":
+        d = np.load(ckpt)
+        w.R_hat, w.F_l_hat, w.n_hat = d["R"], d["F"], d["n"]
+        w.n_hat_err = np.zeros_like(w.n_hat)
+        w.hartlap, w.R_inv = 1.0, np.linalg.inv(d["R"])
+        w._prepare_deprojection()
+        w._mc_done = True
+        print(f"[{args.tag}] reusing response checkpoint {ckpt}")
+    else:
+        w.run_exact() if args.fisher == 'exact' else w.run_mc()
+        if args.fisher == "exact":
+            np.savez(ckpt, R=w.R_hat, F=w.F_l_hat, n=w.n_hat)
 
     # 100 data realizations (fixed mask, fixed Fisher)
     maps_T, maps_P = [], []

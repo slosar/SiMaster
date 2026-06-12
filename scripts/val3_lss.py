@@ -34,6 +34,7 @@ P.add_argument("--shape-noise", type=float, default=0.3)
 P.add_argument("--fisher", default="exact", choices=["exact", "mc"])
 P.add_argument("--batch", type=int, default=128)
 P.add_argument("--quick", action="store_true")
+P.add_argument("--variants", default="flat,curved")
 P.add_argument("--tag", default="val3")
 args = P.parse_args()
 if args.quick:
@@ -75,7 +76,7 @@ print(f"[{args.tag}] nside={nside} lmax={lmax} fsky={mask.mean():.3f} "
 bins = sm.Bins.linear(2, lmax, args.nlb)
 results = {}
 
-for variant in ("flat", "curved"):
+for variant in args.variants.split(","):
     t0 = time.time()
     cls_v = {"gg": cl_gg.copy(), "ge": cl_gk.copy(), "ee": cl_kk.copy(),
              "bb": cl_bb.copy()}

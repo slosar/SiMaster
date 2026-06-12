@@ -217,6 +217,26 @@ The NaMaster-style interface (\texttt{Field}, \texttt{Bins},
 \label{sec:fishercost}
 \input{fisher_methods_section}
 
+\subsection{Scaling out (NERSC Perlmutter)}
+The workload decomposes into independent CG solves (response columns,
+simulations, data realizations) over shared, megabyte-sized inputs, with
+kilobyte-to-megabyte reductions (band-resolution response tensor, $\hat R$,
+$\bar y_{\rm fid}$) --- embarrassingly parallel at the granularity of a
+Slurm job array: one process per GPU, a deterministic column/seed shard per
+task, partial \texttt{npz} outputs, one gather step.  No MPI inside the
+solver.  Per Perlmutter GPU node (64-core EPYC + 4$\times$A100), host-side
+\texttt{ducc} transforms sustain $\sim$90 Planck-scale solves/node-hour, so
+the $5\times10^4$-solve Fisher budget of \S\ref{sec:fishercost} is
+$\sim$570 node-hours ($\approx$6\,h on 100 nodes); a GPU SHT backend (the
+\texttt{sht} interface is two functions) would reduce this
+10--20$\times$ and is the main open item.  On 80\,GB A100s the dense GEMM
+backend itself remains viable to $N_{\rm side}\simeq64$--96
+($G\approx13$\,GB at $N_{\rm side}=64$), covering the deep low-$\ell$
+regime entirely on-GPU.  fp64 is native on A100 (9.7/19.5\,TF), unlike the
+consumer card used for this report's benchmarks; the per-chunk solve
+pipeline should be wrapped in a single \texttt{jit} there so kernel
+dispatch does not become the bottleneck.
+
 \section{Numeric caveats (collected)}
 \begin{enumerate}
 \item Everything is float64; float32 is not supported (quadratic

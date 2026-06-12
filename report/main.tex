@@ -1,0 +1,221 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=22mm]{geometry}
+\usepackage{amsmath,amssymb,graphicx,booktabs,hyperref,xcolor}
+\graphicspath{{figs/}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\Tr}{\mathrm{Tr}}
+\newcommand{\simaster}{\textsc{SiMaster}}
+
+\title{\simaster: GPU-accelerated quadratic maximum-likelihood power
+  spectrum estimation\\[2mm]\large Implementation notes and validation report}
+\author{generated with Claude Code for A.~Slosar}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\simaster\ implements the optimal (quadratic maximum-likelihood, QML)
+bandpower estimator for arbitrary collections of correlated spin-0 and
+spin-2 fields on cut skies, with a NaMaster-like user interface.  No dense
+pixel-covariance matrix is ever built or inverted: the inverse-covariance
+filter is applied by preconditioned conjugate gradients whose operator costs
+two spherical-harmonic transforms, batched over hundreds of right-hand sides
+on a GPU.  The bandpower response (Fisher) matrix, noise bias and window
+functions are obtained either \emph{exactly}, by batched-CG probing of all
+harmonic modes (the default up to $N_{\rm side}\simeq 64$), or by a
+Monte-Carlo engine that scales to $N_{\rm side}=1024$.  We validate the
+estimator on three suites of 100 simulations at $N_{\rm side}=32$ (CMB
+$T/Q/U$ with uniform and with strongly anisotropic noise, and galaxy
+density $\times$ weak lensing with \texttt{pyccl} theory spectra), verify
+$\chi^2$ distributions of the recovered bandpowers, and benchmark the cost
+drivers to project the requirements of an $N_{\rm side}=1024$ analysis.
+\end{abstract}
+
+\tableofcontents
+
+\section{Method}
+\label{sec:method}
+
+\subsection{Data model}
+Each field provides three maps: \texttt{signal} (the observation),
+\texttt{mask} ($w$, the multiplicative response), and \texttt{ivar} (the
+per-pixel inverse noise variance), with
+\begin{equation}
+  d = w\,s + n,\qquad n\sim\mathcal N(0,\,\mathrm{ivar}^{-1})
+  \quad\text{independently per pixel,}
+\end{equation}
+so the noise covariance $N$ is diagonal in pixel space by construction.
+Pixels with $w=0$ or $\mathrm{ivar}=0$ are removed from the data vector.
+Spin-2 fields contribute $(Q,U)$ maps and are estimated as $E/B$ spectra.
+
+Internally all harmonic algebra uses the \emph{real} orthonormal spherical
+harmonics: the coefficients of an isotropic field are i.i.d.\ with variance
+$C_\ell$, the per-mode spectral matrices $(N_c\times N_c)$ are real, and all
+operators are real GEMMs.  The concatenated data vector has covariance
+\begin{equation}
+  \C \;=\; U\hat C U^{\sf T} + N \;+\;\textstyle\sum_j \alpha_j t_j t_j^{\sf T},
+  \qquad U = W\,Y\,B,
+  \label{eq:cov}
+\end{equation}
+with $Y$ the real-basis synthesis matrix restricted to observed pixels, $W$
+the mask, $B$ optional beams, $\hat C$ the block-diagonal fiducial spectra
+(one $N_c\times N_c$ block per mode), and $t_j$ templates to marginalize.
+
+\subsection{Estimator}
+With $A=(\text{spectrum pair},\text{band})$ and $P_A=\partial\C/\partial c_A$
+(flat in $C_\ell$ within each band),
+\begin{equation}
+  \hat y_A = \tfrac12\, d^{\sf T} M P_A M d,\qquad
+  \hat c = R^{-1}\big(\hat y - n\big),\qquad
+  n_A = \tfrac12\Tr[M N M P_A],\qquad
+  R_{AB} = \tfrac12\Tr[M P_A M P_B],
+  \label{eq:qml}
+\end{equation}
+where $M$ is the inverse-covariance filter ($\C^{-1}$, or the
+template-deprojected pseudo-inverse of \S\ref{sec:templates}).  The
+estimator is unbiased for \emph{any} fiducial spectrum --- only optimality
+degrades --- which justifies single-shot estimation around a fiducial;
+\texttt{iterate()} re-centers the fiducial on the estimate (one
+Newton--Raphson step on the field-level likelihood per iteration).
+$\mathrm{cov}(\hat c)\simeq R^{-1}$ at the fiducial.
+
+Evaluating $\hat y$ costs one CG solve plus one adjoint SHT: with
+$a = B^{\sf T}Y^{\sf T}W^{\sf T} (Md)$, each band statistic is
+$\hat y_{(cd),b} = (1+\delta_{cd})^{-1}\sum_{k\in b} (1+\delta_{cd}\!-\!\delta_{cd}/2)\dots$
+concretely $\tfrac12\sum_k a_{c,k} a_{c,k}$ for autos and
+$\sum_k a_{c,k} a_{d,k}$ for crosses.
+
+\subsection{Inverse-covariance filter: CG with a provably SPD preconditioner}
+\label{sec:cg}
+$\C\,x$ costs two SHTs plus diagonal work and is batched over many
+right-hand sides.  The preconditioner is the Woodbury inverse of the
+isotropic approximation to (\ref{eq:cov}),
+\begin{equation}
+  P^{-1} = N^{-1} - N^{-1} U\, T\, U^{\sf T} N^{-1},\qquad
+  T_\ell = \big(\hat C_\ell^{-1} + D_\ell\big)^{-1}
+  = \hat C - \hat C D^{1/2}\big(1+D^{1/2}\hat C D^{1/2}\big)^{-1}D^{1/2}\hat C,
+\end{equation}
+the right-hand form remaining valid for singular $\hat C_\ell$ (e.g.\ zero
+fiducial $BB$).  Positive definiteness of $P^{-1}$ requires $D$ to dominate
+the spectrum of $U^{\sf T}N^{-1}U$; the guaranteed bound is
+$2\max_p(w^2\,\mathrm{ivar})\,N_{\rm pix}/4\pi$ (the factor 2 covers the
+HEALPix Gram-matrix eigenvalue spread, measured to reach 1.75 at
+$\ell=3N_{\rm side}$).  Because the bound is loose for strongly varying
+$w^2\,\mathrm{ivar}$, \simaster\ starts from the statistical mean
+$\sum_p w^2\,\mathrm{ivar}/4\pi$ and escalates toward the bound only if CG
+detects an indefinite direction (monitored every iteration at no cost).
+Uniform-weight problems converge in $\sim$10 iterations at
+$10^{-5}$ tolerance; the factor-2 anisotropic-noise validation costs
+$\sim$2--3$\times$ more.
+
+\subsection{Response matrix, noise bias, windows}
+\label{sec:fisher}
+Two engines, validated against each other and against a brute-force dense
+reference at small $N_{\rm side}$:
+
+\paragraph{Exact (default for $N_{\rm side}\lesssim 64$).}  Solving
+$V = M G$ for all $N_{\rm modes}$ columns of $G=U$ (batched CG; never
+storing the dense $H = G^{\sf T} M G$) and accumulating the $\ell$-resolved
+response tensor
+\begin{equation}
+  T_{abcd}(\ell,\ell') \;=\; \sum_{k\in\ell,\,k'\in\ell'}
+  H_{ak,ck'}\,H_{bk,dk'}
+\end{equation}
+chunk by chunk yields the exact $R$, the exact per-multipole window
+functions $F_{b\ell}$, and (from the diagonal blocks of $V^{\sf T}NV$) the
+exact noise bias, for any binning.  Cost equals $N_{\rm modes}$ CG
+right-hand sides, i.e.\ comparable to a few-thousand-simulation MC run, but
+deterministic.
+
+\paragraph{Monte Carlo (any $N_{\rm side}$).}  For sims
+$x\sim\mathcal N(0,\C)$, $\mathrm{cov}[\hat y_A,\hat y_B] = R_{AB}$
+exactly (also for the deprojected filter, since $M\C M = M$); the same sims
+give $F_{b\ell}=\mathrm{cov}[\hat y_b, \hat y_\ell]$ and noise-only sims
+give $n$.  \textbf{Caveat (important):} the frozen MC noise of $\hat R$
+imprints a fixed offset on all estimates with r.m.s.
+\begin{equation}
+  \sigma_{\rm off}(\hat c_A) \;\approx\; \sigma_A\,
+  \sqrt{\mathrm{SNR}^2_{\rm tot}/N_{\rm sims}},
+  \qquad \mathrm{SNR}^2_{\rm tot} = c^{\sf T} R\, c,
+\end{equation}
+i.e.\ it scales with the \emph{total} squared signal-to-noise across all
+bands ($\sim$ the number of signal-dominated modes).  For signal-dominated
+data this demands large $N_{\rm sims}$; the exact engine avoids the issue
+entirely and is what the validation below uses.  The Hartlap factor is
+applied to $\hat R^{-1}$.
+
+\subsection{Bands, junk bands, aliasing}
+Bandpowers are flat in $C_\ell$.  User bands are augmented with ``junk''
+bands so the band basis covers all of $[\ell_{\min},\ell_{\max}]$; all bands
+are estimated jointly and junk bands are marginalized via the full
+$R^{-1}$.  The covariance model is bandlimited at $\ell_{\max}$ (default
+$3N_{\rm side}-1$): data power above $\ell_{\max}$ is not modeled and would
+alias into the estimates --- the resolution/$\ell_{\max}$ must be chosen so
+that signal+noise above the limit is negligible.  Validation simulations are
+generated bandlimited, making the model exact.  Monopole and dipole of
+spin-0 fields lie outside the band basis and are deprojected automatically.
+
+\subsection{Template marginalization}
+\label{sec:templates}
+Two prescriptions, equivalent and validated against each other:
+(i) \texttt{template\_alpha}$\,=\alpha$ adds
+$\alpha\,\mathrm{tr}(\C)/\lVert t\rVert^2\; t t^{\sf T}$ to the covariance
+(the classic ``correctly large prefactor''; also included when drawing MC
+sims so that $R$ stays consistent; $\alpha\lesssim10^6$ is safe in double
+precision); (ii) the default $\alpha\to\infty$ limit via
+Sherman--Morrison--Woodbury,
+$M = \C^{-1} - \C^{-1}T\,(T^{\sf T}\C^{-1}T)^{-1}T^{\sf T}\C^{-1}$,
+implemented as one extra batched solve, numerically stable and exactly
+nulling the template directions.
+
+\section{Implementation}
+\label{sec:impl}
+Pure Python.  All solver linear algebra runs in JAX (float64) on GPU or
+CPU transparently.  Two exact SHT backends:
+\begin{itemize}
+\item \texttt{dense}: the real-basis synthesis matrices restricted to
+  observed pixels are precomputed (threaded \texttt{ducc0} syntheses, disk
+  cache) and live on the GPU; every SHT is a GEMM and the batched CG is
+  GEMM-bound --- ideal up to $N_{\rm side}\simeq64$ on a small GPU.
+\item \texttt{ducc}: matrix-free transforms through \texttt{ducc0} (the
+  engine behind healpy; exact adjoint pairs, multithreaded CPU) wrapped in
+  \texttt{jax.pure\_callback}; memory $O(N_{\rm obs})$, scales to
+  $N_{\rm side}=1024$ and beyond.
+\end{itemize}
+\texttt{s2fft} (native-JAX GPU SHTs) was evaluated and rejected: its
+HEALPix spin-2 synthesis carries 5--13\% pointwise errors in v1.4.0
+(spin-0 is exact to $10^{-14}$), fatal for QML; the backend interface is
+ready for a future GPU SHT.
+
+The NaMaster-style interface (\texttt{Field}, \texttt{Bins},
+\texttt{compute\_full\_master}) is described in \texttt{docs/migration.md}.
+
+\section{Validation at $N_{\rm side}=32$}
+\label{sec:validation}
+\input{validation_section}
+
+\section{Performance and $N_{\rm side}=1024$ feasibility}
+\label{sec:feasibility}
+\input{feasibility_section}
+
+\section{Numeric caveats (collected)}
+\begin{enumerate}
+\item Everything is float64; float32 is not supported (quadratic
+  estimators difference large numbers).
+\item CG tolerance ($10^{-5}$ default) enters data and response through the
+  same filter, so the leading effect cancels in $R^{-1}\hat y$; do not
+  relax beyond $\sim10^{-4}$.
+\item MC-mode frozen-$\hat R$ offsets scale with total S/N
+  (\S\ref{sec:fisher}); the exact engine is preferred whenever affordable.
+\item The bandlimit $\ell_{\max}$ caveat (\S\ref{sec:method}): unmodeled
+  high-$\ell$ power aliases in.  HEALPix quadrature non-orthonormality at
+  $\ell>2N_{\rm side}$ is part of the model (not an error), but inflates
+  the variance of the top bands --- treat bands near $3N_{\rm side}$ as junk.
+\item With curved input spectra, compare to the window-convolved prediction
+  (\texttt{predict()}), not to naively binned theory.
+\item The preconditioner escalation (\S\ref{sec:cg}) trades iterations for
+  safety under strongly anisotropic weights.
+\end{enumerate}
+
+\end{document}

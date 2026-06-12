@@ -206,3 +206,44 @@ def test_subsampled_response_unbiased():
     assert fro_mean < 0.75 * fro_one
     assert (np.abs(Rm - w0.R_hat) / scale).max() < 0.05
     assert np.abs(np.mean(ns, axis=0) - w0.n_hat).max() < 0.05 * np.abs(w0.n_hat).max()
+
+
+@pytest.mark.slow
+def test_deviation_fit_curved_fiducial():
+    """Curved (smooth) fiducial kept in the model; flat band deviations
+    fitted: dc must be zero-mean with clean chi2 when data follow the
+    fiducial (no flat-band binning bias), and recover an injected tilt."""
+    f, b, cl, mask, ivar = setup_T()
+    cl = cl.copy()  # steep l^-2, NOT band-flattened
+    w = sm.QMLWorkspace(f, b, {('t_0', 't_0'): cl}, lmax=LMAX,
+                        fisher_mode="exact", batch_size=400, seed=8,
+                        verbose=False)
+    w.run_exact()
+    rng = np.random.default_rng(21)
+    nreal = 400
+
+    # (a) data from the fiducial: deviations consistent with zero
+    maps = np.array([hp.alm2map(hp.synalm(cl, lmax=LMAX), NSIDE, lmax=LMAX)
+                     * mask + rng.normal(0, 1.0 / np.sqrt(ivar))
+                     for _ in range(nreal)])
+    res = w.estimate(w.pack_data([maps]), deviations=True)
+    dc = res.cl['t_0 x t_0']
+    pull = dc.mean(0) / (dc.std(0) / np.sqrt(nreal))
+    assert np.abs(pull).max() < 4.0, pull
+    chi2 = res.chi2(np.zeros(b.nbands))
+    assert abs(chi2.mean() - b.nbands) < 5 * np.sqrt(2.0 * b.nbands / nreal)
+
+    # (b) injected smooth 15% tilt: dc recovers the predicted deviation
+    tilt = cl * 0.15 * np.arange(LMAX + 1) / LMAX
+    maps2 = np.array([hp.alm2map(hp.synalm(cl + tilt, lmax=LMAX), NSIDE,
+                                 lmax=LMAX) * mask
+                      + rng.normal(0, 1.0 / np.sqrt(ivar))
+                      for _ in range(nreal)])
+    res2 = w.estimate(w.pack_data([maps2]), deviations=True)
+    dc2 = res2.cl['t_0 x t_0']
+    # exact expectation: R^-1 F (tilt)_l over user bands
+    tvec = tilt[w.ls]
+    exp_full = w.R_inv @ (w.F_l_hat @ tvec)
+    expected = exp_full[np.flatnonzero(w.is_user_band)]
+    pull2 = (dc2.mean(0) - expected) / (dc2.std(0) / np.sqrt(nreal))
+    assert np.abs(pull2).max() < 4.0, pull2

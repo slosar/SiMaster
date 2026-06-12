@@ -49,6 +49,7 @@ class BandpowerResult:
     def __init__(self, ells, cl, cov, spec_names, windows=None, ls=None):
         self.ells, self.cl, self.cov = ells, cl, cov
         self.spec_names, self.windows, self.ls = spec_names, windows, ls
+        self.deviation = False  # True: cl holds deviations from the fiducial
 
     def vector(self):
         """Concatenated (ndata, nspec*nbands) bandpower vector."""
@@ -470,6 +471,22 @@ class QMLWorkspace:
             out[si] = self.bins.bin_cl(self.cov.clmat[i, j])
         return out.reshape(-1)
 
+    def fiducial_yref(self):
+        """Expected y at the fiducial: ybar_A = sum_l F_Al c^fid_l + n_A.
+
+        Deterministic and exact in the 'exact'/'subsampled' engines (the
+        l-resolved windows are available); in 'mc' mode falls back to the
+        simulation mean.  This is the reference point for fitting flat
+        band *deviations* away from a smooth (curved-in-l) fiducial.
+        """
+        if self.fisher_mode in ("exact", "subsampled"):
+            clvec = np.concatenate([self.cov.clmat[i, j, self.ls]
+                                    for (i, j) in self.spec_pairs])
+            return self.F_l_hat @ clvec + self.n_hat
+        if self.ybar_fid is None:
+            raise RuntimeError("mc mode: run_mc() first")
+        return self.ybar_fid
+
     def pack_data(self, maps_per_field):
         """Full-sky maps [[m] or [Q,U] per field] -> data matrix (nrow, B)."""
         import healpy as hp
@@ -480,11 +497,24 @@ class QMLWorkspace:
             cols.append(arr[:, :, f.obs_pix].reshape(arr.shape[0], -1))
         return jnp.asarray(np.concatenate(cols, axis=1).T)
 
-    def estimate(self, data=None, predict_for=None):
+    def estimate(self, data=None, predict_for=None, deviations=False):
         """Estimate bandpowers.
 
         data : None (use the fields' own maps), a (nrow, B) matrix from
             :meth:`pack_data`, or a list of per-field full-sky maps.
+        deviations : if True, keep the full (smooth, curved-in-l) fiducial
+            spectra inside the covariance model and fit only flat band
+            *deviations* dc_b away from it:
+
+                dc = R^-1 (y(d) - ybar_fid),   ybar_fid = F c^fid_l + n.
+
+            E[dc] = R^-1 F (c_true - c_fid)_l: exactly zero at the
+            fiducial and free of flat-band binning bias otherwise (the
+            curvature lives in the fiducial, not in the band model).  The
+            result's ``cl`` then contains deviations (result.deviation is
+            True); add ``bins.bin_cl(fiducial)`` or use iterate() --
+            which in this mode *adds* the flat deviations to the smooth
+            fiducial -- for total bandpowers.
         Returns a BandpowerResult restricted to the user bands.
         """
         if not self._mc_done:
@@ -500,7 +530,10 @@ class QMLWorkspace:
         elif isinstance(data, (list, tuple)):
             data = self.pack_data(data)
         yd, _ = self._y_stats(self._filter(data))
-        if getattr(self, "ybar_debias", None) is not None:
+        if deviations:
+            c_full = self.R_inv @ (np.asarray(yd)
+                                   - self.fiducial_yref()[:, None])
+        elif getattr(self, "ybar_debias", None) is not None:
             # around-fiducial form: response error multiplies (c - c_fid)
             c_full = (self.fiducial_bandpowers()[:, None]
                       + self.R_inv @ (np.asarray(yd)
@@ -508,7 +541,10 @@ class QMLWorkspace:
         else:
             c_full = self.R_inv @ (np.asarray(yd) - self.n_hat[:, None])
         self._last_c_full = c_full
-        return self._package(c_full, self.R_inv)
+        self._last_deviation = deviations
+        res = self._package(c_full, self.R_inv)
+        res.deviation = deviations
+        return res
 
     def _package(self, c_full, cov_full):
         nspec, nb_all = len(self.spec_pairs), self.bins.nbands
@@ -561,18 +597,40 @@ class QMLWorkspace:
         self._mc_done = False
         self.ybar_debias = None  # stale: tied to the previous fiducial
 
-    def iterate(self, data=None, n_iter=2):
+    def update_fiducial_deviations(self, dc_full):
+        """Add flat band deviations to the (smooth) fiducial spectra,
+        preserving their curvature within bands."""
+        nb_all = self.bins.nbands
+        clmat = np.array(self.cov.clmat, copy=True)
+        for si, (i, j) in enumerate(self.spec_pairs):
+            dcl = self.bins.unbin_cl(dc_full[si * nb_all:(si + 1) * nb_all],
+                                     self.lmax)
+            clmat[i, j] = clmat[j, i] = clmat[i, j] + dcl
+        clmat[:, :, : self.lmin] = 0.0
+        clmat = psd_floor(clmat)
+        self.cov.set_clmat(clmat)
+        self._mc_done = False
+        self.ybar_debias = None
+
+    def iterate(self, data=None, n_iter=2, deviations=False):
         """Newton-Raphson-style iteration: re-center fiducial on estimates.
 
-        Returns the list of BandpowerResult, one per iteration (the data
-        batch mean is used to update the fiducial when B > 1).
+        With ``deviations=True`` the fiducial keeps its smooth shape and
+        the flat band deviations are *added* to it each iteration (the
+        recommended mode with a curved fiducial); otherwise the fiducial
+        is replaced by flat bandpowers.  Returns the list of
+        BandpowerResult, one per iteration (the data batch mean drives the
+        update when B > 1).
         """
         history = []
         for it in range(n_iter):
-            res = self.estimate(data)
+            res = self.estimate(data, deviations=deviations)
             history.append(res)
             if it < n_iter - 1:
-                # update fiducial from the full-band (incl. junk) estimates
-                self.update_fiducial(self._last_c_full.mean(axis=1))
+                upd = self._last_c_full.mean(axis=1)
+                if deviations:
+                    self.update_fiducial_deviations(upd)
+                else:
+                    self.update_fiducial(upd)
                 self._log(f"iteration {it + 1}: fiducial updated")
         return history

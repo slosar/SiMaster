@@ -213,3 +213,23 @@ limitation, driven by nu-heterogeneity within wide low-l bands; use
 narrower low-l bands if the deep tail matters). At high l the form
 converges to Gaussian, so compression only changes anything at large
 scales — QML territory.
+
+## Curved fiducial + flat deviations (`estimate(deviations=True)`)
+
+Instead of modelling the spectrum as flat within bands, keep the full
+smooth (curved-in-l) fiducial C_l^fid inside the covariance and fit only
+flat band deviations away from it:
+
+```
+dc = R^-1 ( y(d) - ybar_fid ),    ybar_fid = F_bl C^fid_l + n,
+```
+
+with ybar_fid deterministic and exact in the exact/subsampled engines (the
+l-resolved windows F_bl are available; mc mode uses the sim mean). Then
+E[dc] = R^-1 F (c_true - c_fid)_l — identically zero at the fiducial and
+free of flat-band binning bias otherwise, since all spectral curvature
+lives in the fiducial. `iterate(deviations=True)` adds the fitted flat
+deviations to the smooth fiducial each step (preserving its shape) instead
+of replacing it by flat bandpowers. This is the recommended mode whenever
+a good smooth fiducial exists (CMB, LCDM-like LSS): the bandpower windows
+then only matter at second order in the residual.

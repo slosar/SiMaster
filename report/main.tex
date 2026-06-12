@@ -82,9 +82,21 @@ $\mathrm{cov}(\hat c)\simeq R^{-1}$ at the fiducial.
 
 Evaluating $\hat y$ costs one CG solve plus one adjoint SHT: with
 $a = B^{\sf T}Y^{\sf T}W^{\sf T} (Md)$, each band statistic is
-$\hat y_{(cd),b} = (1+\delta_{cd})^{-1}\sum_{k\in b} (1+\delta_{cd}\!-\!\delta_{cd}/2)\dots$
-concretely $\tfrac12\sum_k a_{c,k} a_{c,k}$ for autos and
-$\sum_k a_{c,k} a_{d,k}$ for crosses.
+$\tfrac12\sum_{k\in b} a_{c,k} a_{c,k}$ for autos and
+$\sum_{k\in b} a_{c,k} a_{d,k}$ for crosses.
+
+\paragraph{Curved fiducial, flat deviations.}  Rather than modelling the
+spectrum as flat within bands, \texttt{estimate(deviations=True)} keeps
+the full smooth fiducial $C^{\rm fid}_\ell$ inside the covariance and fits
+only flat band deviations away from it,
+$\delta\hat c = R^{-1}(\hat y - \bar y_{\rm fid})$ with
+$\bar y_{\rm fid} = F_{b\ell}C^{\rm fid}_\ell + n$ exact from the
+$\ell$-resolved windows.  Then
+$\langle\delta\hat c\rangle = R^{-1}F(c_{\rm true}-c_{\rm fid})_\ell$:
+identically zero at the fiducial, and flat-band binning bias is pushed to
+second order in the residual since all spectral curvature lives in the
+fiducial.  \texttt{iterate(deviations=True)} adds the fitted deviations to
+the smooth fiducial each step, preserving its shape.
 
 \subsection{Inverse-covariance filter: CG with a provably SPD preconditioner}
 \label{sec:cg}

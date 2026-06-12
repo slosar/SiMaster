@@ -255,6 +255,20 @@ class CovModel:
             x = x + self.Tmat @ (jnp.sqrt(self.template_alpha)[:, None] * zt)
         return x
 
-    def sample_noise(self, key, nbatch: int):
-        eta = jax.random.normal(key, (self.nrow, nbatch), dtype=self.dtype)
+    def sample_noise(self, key, nbatch: int, probe: str = "rademacher"):
+        """Noise-bias probe vectors with E[x x^T] = N.
+
+        'rademacher' (default): N^(1/2) d with d in {+-1}; exact since N is
+        diagonal, and the Hutchinson variance 2*sum_{i!=j} X_ij^2 drops the
+        diagonal term that dominates for noise-dominated bands.  'gaussian'
+        draws actual noise realizations (same mean, larger variance).
+        Only the *mean* of the quadratic statistics is used downstream, so
+        non-Gaussian probes are exact here -- unlike the response-matrix
+        sims in :meth:`sample`, whose covariance identity needs Gaussianity.
+        """
+        if probe == "rademacher":
+            eta = jax.random.rademacher(key, (self.nrow, nbatch),
+                                        dtype=self.dtype)
+        else:
+            eta = jax.random.normal(key, (self.nrow, nbatch), dtype=self.dtype)
         return jnp.sqrt(self.noisevar)[:, None] * eta

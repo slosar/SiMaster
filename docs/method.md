@@ -83,7 +83,15 @@ Two engines:
 - **mc** (`fisher_mode='mc'`): for sims `x ~ N(0, C̃)`,
   `cov[y_A, y_B] = R_AB` exactly (this also holds for the deprojected
   filter because `M C̃ M = M`), the same sims give windows
-  `F_bl = cov[y_b, y_l]`, and noise-only sims give `n`. Scales to any
+  `F_bl = cov[y_b, y_l]`, and noise-only probes give `n`.  The response
+  sims must be Gaussian (the covariance identity uses Gaussian fourth
+  moments; Rademacher probes would bias it through their fourth cumulant).
+  The noise-bias trace `n_A = 1/2 Tr[M N M P_A]` is single-`M`, so it *is*
+  plain Hutchinson estimation: there we use `N^(1/2) d` with Rademacher
+  `d` (exact, since N is diagonal), which is unbiased with strictly lower
+  variance than Gaussian noise draws — measured ~1.1-1.3x here; the gain
+  is bounded because `P_A` is a band projector whose Frobenius mass is
+  off-diagonal in pixel space, which no probe distribution suppresses. Scales to any
   nside. **Caveat:** the frozen MC noise of `R̂` adds a fixed offset to all
   estimates with rms `≈ σ_A · sqrt(SNR²_tot / n_sims)` where `SNR²_tot` is
   the *total* squared signal-to-noise summed over all bands. For

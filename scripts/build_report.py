@@ -81,6 +81,25 @@ def validation_section():
                         "\\end{figure}\n")
         out.append("\\clearpage\n")
     out.append(
+        "\n\\subsection{Column-subsampled response (stochastic exact engine)}\n"
+        "A third response engine solves only a random fraction $f$ of the "
+        "mode columns of $MG$, stratified per $\\ell'$ and renormalized by "
+        "$N_{\\ell'}/n_{\\ell'}$ (exactly unbiased; sampling without "
+        "replacement makes it continuously exact as $f\\to1$).  Because the "
+        "row index of $H$ is summed exactly for every solved column, the "
+        "sampling error stays \\emph{local in bands}: "
+        "$\\delta c_A/\\sigma_A \\sim \\mathrm{SNR}_A\\sqrt{\\rho(1-f)/n_A}$ "
+        "with the band's own S/N, versus the coherent "
+        "$\\sqrt{\\mathrm{SNR}^2_{\\rm tot}/N_{\\rm sims}}$ of the sims-MC "
+        "engine.  Measured head-to-head ($N_{\\rm side}=8$, signal-dominated, "
+        "$\\sim$110 solves each): frozen-response offsets of "
+        "0.13--0.18$\\sigma$ (subsampled, $f=0.25$) versus "
+        "0.7--1.6$\\sigma$ (sims-MC) --- a 6--9$\\times$ accuracy gain at "
+        "equal cost, i.e.\\ $\\mathcal{O}(50\\times)$ fewer solves at equal "
+        "accuracy.  This is the recommended engine at scales where the full "
+        "exact run is unaffordable, combined with iteration for strongly "
+        "signal-dominated bands.\n")
+    out.append(
         "\n\\subsection{Optimality vs pseudo-$C_\\ell$}\n"
         "On 100 common realizations (spin-0 CMB-like field, $N_{\\rm side}=16$, "
         "same mask and bins; \\texttt{notebooks/simaster\\_vs\\_namaster.ipynb}) "

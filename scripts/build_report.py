@@ -39,9 +39,12 @@ def validation_section():
         "fixed mask (= fixed Fisher), exact response engine, six spectra "
         "estimated jointly (TT, EE, BB, TE, TB, EB or the LSS analogues), "
         "monopole/dipole of spin-0 fields deprojected.  Two input-spectrum "
-        "variants per suite: \\emph{flat} (data generated from band-flat "
-        "spectra; the estimates must match the input bandpowers exactly, "
-        "with no window ambiguity) and \\emph{curved} (original spectra; "
+        "variants per suite (both full curved-sky; the names refer to the "
+        "input spectrum shape): \\emph{band-flat} (data generated from "
+        "band-flat spectra, which lie exactly in the estimator's model "
+        "space; the estimates must match the input bandpowers exactly, "
+        "with no window ambiguity) and \\emph{smooth} (original "
+        "curved-in-$\\ell$ spectra; "
         "compared to the window-convolved prediction).  The $\\chi^2$ is "
         "that of the full bandpower vector against the target using the "
         "QML covariance $R^{-1}$.\n")
@@ -53,9 +56,11 @@ def validation_section():
         s = jload(f"{tag}_summary.json")
         if s is None:
             continue
+        vname = {"flat": "band-flat", "curved": "smooth"}
         for variant, r in s.items():
             out.append(
-                f"{tag} & {variant} & {r['chi2_mean']:.1f} & {r['dof']} & "
+                f"{tag} & {vname.get(variant, variant)} & "
+                f"{r['chi2_mean']:.1f} & {r['dof']} & "
                 f"{r['ks_p']:.3f} & {r['pull_mean']:+.3f} & "
                 f"{r['pull_std']:.3f} \\\\\n")
     out.append("\\bottomrule\n\\end{tabular}\n"
@@ -77,7 +82,9 @@ def validation_section():
                     out.append(
                         "\\begin{figure}[h]\\centering"
                         f"\\includegraphics[width=.78\\textwidth]{{{f}}}"
-                        f"\\caption{{{tag} ({variant}): {cap}.}}"
+                        f"\\caption{{{tag} "
+                        f"({'band-flat' if variant == 'flat' else 'smooth'}"
+                        f" input): {cap}.}}"
                         "\\end{figure}\n")
         out.append("\\clearpage\n")
     out.append(

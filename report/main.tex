@@ -220,6 +220,10 @@ The NaMaster-style interface (\texttt{Field}, \texttt{Bins},
   (\texttt{predict()}), not to naively binned theory.
 \item The preconditioner escalation (\S\ref{sec:cg}) trades iterations for
   safety under strongly anisotropic weights.
+\item \simaster\ is curved-sky only (no flat-sky estimator).  The only
+  geometry-aware object is the synthesis operator $Y$, so a flat-sky port
+  (FFTs, $|k|$ bins) would reuse the solver, response engines and
+  compression unchanged --- future work.
 \end{enumerate}
 
 \end{document}

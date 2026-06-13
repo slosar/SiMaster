@@ -188,21 +188,26 @@ def validation_section():
             "elements vs the exact engine; (c) residual distribution --- "
             "column-subsampling is several times tighter than Monte Carlo "
             "at comparable cost.}\\label{fig:val2x_fisher}\\end{figure}\n")
+        nv = vx.get("n_realizations_valid", vx["nreal"])
+        ninv = vx.get("n_realizations_with_neg_arg", 0)
         out.append(
             "Expressing the bandpower likelihood with BJK x-factors "
             "($Z_b=\\ln(\\hat c_b+x_b)$, autos only) improves the agreement "
             "of the goodness-of-fit statistic with $\\chi^2_{\\rm dof}$: the "
             f"KS $p$-value rises from {vx['ks_gauss']:.3f} (plain Gaussian "
-            f"$\\chi^2$) to {vx['ks_lognorm']:.3f} (offset-lognormal), the "
+            f"$\\chi^2$, mean {vx['chi2_gauss_mean']:.1f}) to "
+            f"{vx['ks_lognorm']:.3f} (offset-lognormal, mean "
+            f"{vx['chi2_lognorm_mean']:.1f} for dof {vx['dof']}), the "
             "Gaussian's heavy upper tail (from upward auto-power "
             "fluctuations) being removed by the log transform "
             "(Fig.~\\ref{fig:val2x_chi2}).  The transform symmetrizes the "
             "signal-dominated bands and can mildly over-correct "
-            "noise-dominated ones; with strong mask-induced band coupling a "
-            "few realizations have $\\hat c_b+x_b$ driven near zero in some "
-            "band (the offset-lognormal assumes weakly-coupled bands), "
-            "producing the rare upper-$\\chi^2$ outliers noted on the "
-            "figure.\n")
+            "noise-dominated ones (bottom panel); and because the "
+            "per-band offset-lognormal assumes weakly-coupled bands, the "
+            f"strong mask coupling here drives $\\hat c_b+x_b\\le0$ in some "
+            f"band for {ninv} of {vx['nreal']} realizations, which fall "
+            "outside the model's domain and are excluded (a documented "
+            "limitation --- narrower low-$\\ell$ bands avoid it).\n")
         out.append(
             "\\begin{figure}[h]\\centering"
             "\\includegraphics[width=.92\\textwidth]{val2x_xfactor_chi2.png}\\\\"

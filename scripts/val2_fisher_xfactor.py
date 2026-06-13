@@ -203,25 +203,34 @@ for i in range(args.nreal):
 chi2_G, chi2_Z = np.array(chi2_G), np.array(chi2_Z)
 dof = est.shape[1]
 
+# realizations valid for the offset-lognormal: every auto band has c+x>0
+# (mask-induced band coupling can drive R^-1 y negative in a band -- a real
+# limitation of the per-band offset-lognormal, reported not hidden)
+valid = ~(((est + x[None, :])[:, is_auto] <= 0).any(axis=1))
+n_invalid = int((~valid).sum())
+chi2_Zv = chi2_Z[valid]
 ks_G = stats.kstest(chi2_G, lambda v: stats.chi2.cdf(v, dof)).pvalue
-ks_Z = stats.kstest(chi2_Z, lambda v: stats.chi2.cdf(v, dof)).pvalue
+ks_Z = stats.kstest(chi2_Zv, lambda v: stats.chi2.cdf(v, dof)).pvalue
 
 x_hi = dof + 6 * np.sqrt(2 * dof)
-over_G = int((chi2_G > x_hi).sum())
-over_Z = int((chi2_Z > x_hi).sum())
 fig, ax = plt.subplots(1, 2, figsize=(11, 4.2), sharex=True, sharey=True)
 xg = np.linspace(max(0.1, dof - 5 * np.sqrt(2 * dof)), x_hi, 300)
 hbins = np.linspace(0, x_hi, 26)
-for a, (c2, ksp, over, lab) in zip(
-        ax, [(chi2_G, ks_G, over_G, "Gaussian $\\chi^2$ (no x-factor)"),
-             (chi2_Z, ks_Z, over_Z,
+for a, (c2, ksp, ninv, lab) in zip(
+        ax, [(chi2_G, ks_G, 0, "Gaussian $\\chi^2$ (no x-factor)"),
+             (chi2_Zv, ks_Z, n_invalid,
               "offset-lognormal $\\chi^2$ (x-factors)")]):
     a.hist(np.clip(c2, None, x_hi), bins=hbins, density=True, alpha=0.6,
-           label=f"{args.nreal} realizations")
+           label=f"{len(c2)} realizations")
     a.plot(xg, stats.chi2.pdf(xg, dof), "k-", lw=1.5,
            label=fr"$\chi^2_{{{dof}}}$")
     a.set_xlabel(r"$\chi^2$"); a.set_ylabel("density")
-    extra = f"\n({over} beyond axis)" if over else ""
+    notes = []
+    if int((c2 > x_hi).sum()):
+        notes.append(f"{int((c2 > x_hi).sum())} beyond axis")
+    if ninv:
+        notes.append(f"{ninv} excluded ($c+x\\leq 0$)")
+    extra = "\n(" + "; ".join(notes) + ")" if notes else ""
     a.set_title(f"{lab}\nmean {c2.mean():.1f} (dof {dof}), "
                 f"KS p = {ksp:.3f}{extra}", fontsize=9)
     a.legend(fontsize=8)
@@ -237,8 +246,9 @@ plt.close(fig)
 # 1:1 line = the x-factor symmetrizes that band; the transform helps most
 # in the signal-dominated bands and can over-correct where x ~ c.
 auto_idx = np.flatnonzero(is_auto)
-sk_raw = np.array([stats.skew(est[:, b]) for b in auto_idx])
-sk_z = np.array([stats.skew(np.log(np.clip(est[:, b] + x[b], 1e-300, None)))
+ev = est[valid]
+sk_raw = np.array([stats.skew(ev[:, b]) for b in auto_idx])
+sk_z = np.array([stats.skew(np.log(np.clip(ev[:, b] + x[b], 1e-300, None)))
                  for b in auto_idx])
 snr = c_tgt[auto_idx] / np.sqrt(np.diag(Ce)[auto_idx])
 fig, ax = plt.subplots(1, 2, figsize=(10.5, 4.2))
@@ -253,9 +263,9 @@ ax[0].set_title("per auto-band skewness\n(below line: x-factor helps)",
 plt.colorbar(sc, ax=ax[0], label=r"$\log_{10}$ band S/N")
 # the single most signal-dominated auto band, raw vs Z histograms
 b0 = int(auto_idx[np.argmax(snr)])
-ax[1].hist((est[:, b0] - c_tgt[b0]) / np.sqrt(Ce[b0, b0]), bins=18,
-           density=True, alpha=0.6, label=f"raw, skew {stats.skew(est[:,b0]):+.2f}")
-z = np.log(est[:, b0] + x[b0]); zt = np.log(c_tgt[b0] + x[b0])
+ax[1].hist((ev[:, b0] - c_tgt[b0]) / np.sqrt(Ce[b0, b0]), bins=18,
+           density=True, alpha=0.6, label=f"raw, skew {stats.skew(ev[:,b0]):+.2f}")
+z = np.log(ev[:, b0] + x[b0]); zt = np.log(c_tgt[b0] + x[b0])
 ax[1].hist((z - zt) / z.std(), bins=18, density=True, alpha=0.6,
            label=f"$\\ln(c+x)$, skew {stats.skew(z):+.2f}")
 xx = np.linspace(-4, 4, 200)
@@ -272,8 +282,9 @@ plt.close(fig)
 summary = dict(
     nside=nside, lmax=lmax, dof=int(dof), nreal=args.nreal,
     chi2_gauss_mean=float(chi2_G.mean()), ks_gauss=float(ks_G),
-    chi2_lognorm_mean=float(chi2_Z.mean()), ks_lognorm=float(ks_Z),
-    n_realizations_with_neg_arg=int(n_bad),
+    chi2_lognorm_mean=float(chi2_Zv.mean()), ks_lognorm=float(ks_Z),
+    n_realizations_with_neg_arg=n_invalid,
+    n_realizations_valid=int(valid.sum()),
     fisher_resid_rms_sub=float(res_s.std()),
     fisher_resid_rms_mc=float(res_m.std()),
     sub_frac=args.frac, nsims_mc=args.nsims_mc)

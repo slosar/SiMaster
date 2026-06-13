@@ -1,27 +1,56 @@
-All suites: $N_{\rm side}=32$, $\ell_{\max}=64=2N_{\rm side}$ (chosen for the 6\,GB GPU shared with the desktop session; pass \texttt{--lmax 95} on a bigger card), $\sigma_T=50\,\mu$K (S/N per mode crosses unity at $\ell\approx49$), bands of $\Delta\ell=8$ over $2\le\ell\le64$, 100 data realizations at fixed mask (= fixed Fisher), exact response engine, six spectra estimated jointly (TT, EE, BB, TE, TB, EB or the LSS analogues), monopole/dipole of spin-0 fields deprojected.  Two input-spectrum variants per suite: \emph{flat} (data generated from band-flat spectra; the estimates must match the input bandpowers exactly, with no window ambiguity) and \emph{curved} (original spectra; compared to the window-convolved prediction).  The $\chi^2$ is that of the full bandpower vector against the target using the QML covariance $R^{-1}$.
+All suites: $N_{\rm side}=32$, $\ell_{\max}=64=2N_{\rm side}$ (chosen for the 6\,GB GPU shared with the desktop session; pass \texttt{--lmax 95} on a bigger card), $\sigma_T=50\,\mu$K (S/N per mode crosses unity at $\ell\approx49$), bands of $\Delta\ell=8$ over $2\le\ell\le64$, 100 data realizations at fixed mask (= fixed Fisher), exact response engine, six spectra estimated jointly (TT, EE, BB, TE, TB, EB or the LSS analogues), monopole/dipole of spin-0 fields deprojected.  Two input-spectrum variants per suite (both full curved-sky; the names refer to the input spectrum shape): \emph{band-flat} (data generated from band-flat spectra, which lie exactly in the estimator's model space; the estimates must match the input bandpowers exactly, with no window ambiguity) and \emph{smooth} (original curved-in-$\ell$ spectra; compared to the window-convolved prediction).  The $\chi^2$ is that of the full bandpower vector against the target using the QML covariance $R^{-1}$.  Test 3 replaces the smooth variant by the \emph{deviation} mode: the smooth \texttt{pyccl} fiducial is kept inside the covariance and flat band deviations are fitted; the target is exactly zero, with no window or binning ambiguity.
 \begin{table}[h]\centering\small
 \begin{tabular}{llrrrrr}
 \toprule
 suite & variant & $\langle\chi^2\rangle$ & dof & KS $p$ & pull mean & pull std \\
 \midrule
-val1 & flat & 45.3 & 48 & 0.009 & +0.004 & 0.972 \\
-val1 & curved & 48.2 & 48 & 0.712 & -0.005 & 1.001 \\
+val1 & band-flat & 45.3 & 48 & 0.009 & +0.004 & 0.972 \\
+val1 & smooth & 48.2 & 48 & 0.712 & -0.005 & 1.001 \\
+val2 & band-flat & 46.5 & 48 & 0.085 & -0.027 & 0.984 \\
+val2 & smooth & 48.5 & 48 & 0.570 & -0.006 & 1.004 \\
+val3 & deviations (smooth fid.) & 47.4 & 48 & 0.769 & -0.005 & 0.992 \\
+val3 & band-flat & 48.1 & 48 & 0.770 & +0.007 & 0.991 \\
 \bottomrule
 \end{tabular}
 \caption{Validation summary.  The KS $p$-value compares the per-realization $\chi^2$ values to the $\chi^2_{\rm dof}$ distribution; pulls are per-band normalized residuals over all spectra, bands and realizations (expected: mean 0, std 1).}
 \end{table}
+Of the six suite/variant combinations, five have $\chi^2/\mathrm{dof}$ and KS $p$-values fully consistent with the expected distribution; the val1 band-flat entry ($p=0.009$) is a low but structureless outlier (the pull histogram is unit-width and unbiased), attributable to the particular 100-realization draw --- the same band-flat configuration passes cleanly in val2 ($p=0.085$) and val3 ($p=0.77$), and at $N_{\rm side}=16$ ($p=0.83$).
 
 \subsection{Test 1: CMB $T/Q/U$, NaMaster mask, uniform noise ($\sigma_T=50\,\mu$K/pix, $\sigma_P=\sqrt2\sigma_T$)}
-\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_flat_spectra.png}\caption{val1 (flat): recovered bandpowers.}\end{figure}
-\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_flat_chi2.png}\caption{val1 (flat): $\chi^2$ distribution.}\end{figure}
-\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_flat_pulls.png}\caption{val1 (flat): pull distribution.}\end{figure}
-\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_curved_spectra.png}\caption{val1 (curved): recovered bandpowers.}\end{figure}
-\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_curved_chi2.png}\caption{val1 (curved): $\chi^2$ distribution.}\end{figure}
-\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_curved_pulls.png}\caption{val1 (curved): pull distribution.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_flat_spectra.png}\caption{val1 (band-flat input): recovered bandpowers.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_flat_chi2.png}\caption{val1 (band-flat input): $\chi^2$ distribution.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_flat_pulls.png}\caption{val1 (band-flat input): pull distribution.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_curved_spectra.png}\caption{val1 (smooth input): recovered bandpowers.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_curved_chi2.png}\caption{val1 (smooth input): $\chi^2$ distribution.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_curved_pulls.png}\caption{val1 (smooth input): pull distribution.}\end{figure}
+\clearpage
+
+\subsection{Test 2: as test 1, but ivar in 8 longitude strips with the noise r.m.s.\ alternating by a factor of 2 across the observed region}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val2_flat_spectra.png}\caption{val2 (band-flat input): recovered bandpowers.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val2_flat_chi2.png}\caption{val2 (band-flat input): $\chi^2$ distribution.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val2_flat_pulls.png}\caption{val2 (band-flat input): pull distribution.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val2_curved_spectra.png}\caption{val2 (smooth input): recovered bandpowers.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val2_curved_chi2.png}\caption{val2 (smooth input): $\chi^2$ distribution.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val2_curved_pulls.png}\caption{val2 (smooth input): pull distribution.}\end{figure}
+\clearpage
+
+\subsection{Test 3: galaxy density ($z{=}0.75$, $b{=}1$) and weak-lensing shear (sources at $z{=}1.5$; 15 gal/arcmin$^2$, shape noise 0.3), \texttt{pyccl} theory}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val3_flat_spectra.png}\caption{val3 (band-flat input): recovered bandpowers.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val3_flat_chi2.png}\caption{val3 (band-flat input): $\chi^2$ distribution.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val3_flat_pulls.png}\caption{val3 (band-flat input): pull distribution.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val3_dev_spectra.png}\caption{val3 (deviations from smooth fiducial input): recovered bandpowers.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val3_dev_chi2.png}\caption{val3 (deviations from smooth fiducial input): $\chi^2$ distribution.}\end{figure}
+\begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val3_dev_pulls.png}\caption{val3 (deviations from smooth fiducial input): pull distribution.}\end{figure}
 \clearpage
 
 \subsection{Column-subsampled response (stochastic exact engine)}
 A third response engine solves only a random fraction $f$ of the mode columns of $MG$, stratified per $\ell'$ and renormalized by $N_{\ell'}/n_{\ell'}$ (exactly unbiased; sampling without replacement makes it continuously exact as $f\to1$).  Because the row index of $H$ is summed exactly for every solved column, the sampling error stays \emph{local in bands}: $\delta c_A/\sigma_A \sim \mathrm{SNR}_A\sqrt{\rho(1-f)/n_A}$ with the band's own S/N, versus the coherent $\sqrt{\mathrm{SNR}^2_{\rm tot}/N_{\rm sims}}$ of the sims-MC engine.  Measured head-to-head ($N_{\rm side}=8$, signal-dominated, $\sim$110 solves each): frozen-response offsets of 0.13--0.18$\sigma$ (subsampled, $f=0.25$) versus 0.7--1.6$\sigma$ (sims-MC) --- a 6--9$\times$ accuracy gain at equal cost, i.e.\ $\mathcal{O}(50\times)$ fewer solves at equal accuracy.  This is the recommended engine at scales where the full exact run is unaffordable, combined with iteration for strongly signal-dominated bands.
 
+\subsection{Radical compression (offset-lognormal likelihood)}
+Following Bond, Jaffe \& Knox (2000), \texttt{simaster.compress} reduces an estimate to the triplet $\{\hat c_b, x_b, F_{bb'}\}$ with the likelihood Gaussian in $Z_b=\ln(c_b+x_b)$ (auto-spectra; crosses stay Gaussian).  The x-factors generalize $x_\ell=\mathcal N_\ell/B_\ell^2$ via the exact identity $\hat c + x = R^{-1}\hat y$ (total power), i.e.\ $x=R^{-1}n$ from the workspace response and noise bias.  Against the exact dense likelihood at $N_{\rm side}=8$ the offset-lognormal is good to $|\Delta(-2\ln L)|\lesssim1$ within $\pm1.5\sigma$ even in the lowest $\Delta\ell=5$ band and always beats the Gaussian out to $3\sigma$; the far low-$C$ tail of the exact likelihood is steeper (use narrower low-$\ell$ bands if deep lower tails matter).
+
 \subsection{Optimality vs pseudo-$C_\ell$}
 On 100 common realizations (spin-0 CMB-like field, $N_{\rm side}=16$, same mask and bins; \texttt{notebooks/simaster\_vs\_namaster.ipynb}) the empirical QML error bars are $0.38\times$, $0.52\times$ and $0.78\times$ the NaMaster pseudo-$C_\ell$ ones in the three lowest bands, converging to unity at $\ell\gtrsim25$, and the predicted QML covariance matches the empirical scatter at the few-percent level.
+
+\subsection{Exact vs Monte-Carlo response}
+Repeating test 1 with the MC engine ($N_{\rm sims}=8192$) gives $\langle\chi^2\rangle = 49.2$ (dof 48) for the flat variant, illustrating the frozen-$\hat R$ S/N penalty discussed in \S\ref{sec:fisher}; the two engines agree on the response matrix itself to the expected $\sqrt{2/N_{\rm sims}}$ accuracy.

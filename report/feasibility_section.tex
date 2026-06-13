@@ -26,14 +26,14 @@ spectra/precondition tables --- \textbf{a 24--40 GB GPU is sufficient for
 the solver itself}; the hypothetical dense-$G$ backend would need
 1492.0 TB and is firmly excluded.
 One covariance application (batched SHTs at $\ell_{\max}=2048$ on 24 CPU
-cores) costs $\sim$3646\,s per batch of
-64 (naive $N_{\rm side}^3$ extrapolation from 32 (pessimistic, overhead-dominated)), i.e.\ a CG solve of 64 RHS in
-$\sim$2005 min; $10^5$ MC sims for the response matrix
-would cost $\sim$52226 h of CPU-SHT
+cores) costs $\sim$81\,s per batch of
+64 (\emph{measured} full-sky ducc transforms at $N_{\rm side}=1024$, $\ell_{\max}=2048$ (1.3\,s per RHS per $\mathbb{C}$-apply on this CPU)), i.e.\ a CG solve of 64 RHS in
+$\sim$44 min; $10^5$ MC sims for the response matrix
+would cost $\sim$1155 h of CPU-SHT
 time.  The honest conclusion: at $N_{\rm side}=1024$ the SHT, not the GPU
 linear algebra, is the bottleneck; a GPU SHT (the \texttt{sht} backend
 interface is ready) or a CPU farm for the transform stage is the upgrade
 path.  Per-realization estimation (one solve) is entirely tractable
-($\sim$31.3 min/realization equivalent);
+($\sim$0.7 min/realization equivalent);
 it is the response matrix that sets the budget, and it is computed once
 per mask/fiducial.

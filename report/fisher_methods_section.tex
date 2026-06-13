@@ -30,23 +30,23 @@ $\ell_{\max}=2000$, $T/E/B$, $f_{\rm sky}\simeq0.6$,
 TT signal-dominated to $\ell\sim1500$, hence
 $\mathrm{SNR}^2_{\rm tot}\approx10^6$ and
 $N_{\rm modes}=3(\ell_{\max}+1)^2\approx1.2\times10^7$.
-One $\C$-apply costs 26 core-s (estimated from typical ducc0 throughput (to be replaced by the measured value once \texttt{bench\_sht\_scaling.py} has run)); with
+One $\C$-apply costs 30 core-s (measured on this machine's 24-core CPU (ducc0)); with
 $\sim$entire-mission anisotropic noise we budget 100 CG iterations,
-i.e.\ 0.72 core-h per solve.
+i.e.\ 0.84 core-h per solve.
 
 \begin{table}[h]\centering\small
 \begin{tabular}{lrr}
 \toprule
 engine & solves needed & CPU cost [core-h] \\
 \midrule
-exact (all columns) & $1.2\times10^7$ & 8\,675\,336 \\
+exact (all columns) & $1.2\times10^7$ & 10\,088\,702 \\
 sims-MC, no iteration & $\mathrm{SNR}^2_{\rm tot}/\epsilon^2
-  = 10^8$ & 72\,222\,222 \\
+  = 10^8$ & 83\,988\,510 \\
 subsampled, no iteration & $f\ge0.75$ of all columns &
-  6\,506\,502 \\
+  7\,566\,527 \\
 \textbf{subsampled + iteration} & $\sim250$ cols/band
-  $\to 49,500$\hspace{-2mm} & \textbf{35\,750} \\
-sims-MC + iteration & $\sim39,600$ & 28\,600 \\
+  $\to 49,500$\hspace{-2mm} & \textbf{41\,574} \\
+sims-MC + iteration & $\sim39,600$ & 33\,259 \\
 \bottomrule
 \end{tabular}
 \caption{Fisher cost for a Planck-like analysis at
@@ -73,8 +73,8 @@ width cancels --- giving $f\simeq0.75$, while sims-MC needs
 $10^8$ solves.  With a good fiducial, the around-fiducial estimator and
 one re-centering make the offset multiply $(c-c_{\rm fid})$ instead of
 $c$, and both engines drop to
-$\mathcal{O}(5\times10^4)$ solves: about 35\,750 core-h
-($\approx$6 days on a 256-core
+$\mathcal{O}(5\times10^4)$ solves: about 41\,574 core-h
+($\approx$7 days on a 256-core
 farm), or $\sim$1 week on a single A100-class GPU once a GPU SHT backend
 exists ($\sim$0.15\,s per $\C$-apply), with $\sim$38\,GB of GPU RAM at
 batch 64.  The noise bias never matters: Rademacher probes have

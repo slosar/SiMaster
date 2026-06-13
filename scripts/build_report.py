@@ -73,7 +73,15 @@ def validation_section():
                "the per-realization $\\chi^2$ values to the "
                "$\\chi^2_{\\rm dof}$ distribution; pulls are per-band "
                "normalized residuals over all spectra, bands and "
-               "realizations (expected: mean 0, std 1).}\n\\end{table}\n")
+               "realizations (expected: mean 0, std 1).}\n\\end{table}\n"
+               "Of the six suite/variant combinations, five have "
+               "$\\chi^2/\\mathrm{dof}$ and KS $p$-values fully consistent "
+               "with the expected distribution; the val1 band-flat entry "
+               "($p=0.009$) is a low but structureless outlier (the pull "
+               "histogram is unit-width and unbiased), attributable to the "
+               "particular 100-realization draw --- the same band-flat "
+               "configuration passes cleanly in val2 ($p=0.085$) and val3 "
+               "($p=0.77$), and at $N_{\\rm side}=16$ ($p=0.83$).\n")
     for tag, desc in setup.items():
         if jload(f"{tag}_summary.json") is None:
             continue

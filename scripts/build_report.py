@@ -86,6 +86,15 @@ def validation_section():
         if jload(f"{tag}_summary.json") is None:
             continue
         out.append(f"\n\\subsection{{Test {tag[-1]}: {desc}}}\n")
+        if os.path.exists(os.path.join(REPORT, "figs", f"{tag}_inputs.png")):
+            out.append(
+                "\\begin{figure}[h]\\centering"
+                f"\\includegraphics[width=\\textwidth]{{{tag}_inputs.png}}"
+                "\\caption{Inputs for "
+                f"test {tag[-1]}: one example observed data map, the mask, "
+                "and the inverse-noise-variance map (Mollweide; unobserved "
+                "pixels grey).}"
+                f"\\label{{fig:{tag}_inputs}}\\end{{figure}}\n")
         for variant in ("flat", "curved", "dev"):
             for kind, cap in [("spectra", "recovered bandpowers"),
                               ("chi2", "$\\chi^2$ distribution"),

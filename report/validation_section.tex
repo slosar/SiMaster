@@ -17,6 +17,7 @@ val3 & band-flat & 48.1 & 48 & 0.770 & +0.007 & 0.991 \\
 Of the six suite/variant combinations, five have $\chi^2/\mathrm{dof}$ and KS $p$-values fully consistent with the expected distribution; the val1 band-flat entry ($p=0.009$) is a low but structureless outlier (the pull histogram is unit-width and unbiased), attributable to the particular 100-realization draw --- the same band-flat configuration passes cleanly in val2 ($p=0.085$) and val3 ($p=0.77$), and at $N_{\rm side}=16$ ($p=0.83$).
 
 \subsection{Test 1: CMB $T/Q/U$, NaMaster mask, uniform noise ($\sigma_T=50\,\mu$K/pix, $\sigma_P=\sqrt2\sigma_T$)}
+\begin{figure}[h]\centering\includegraphics[width=\textwidth]{val1_inputs.png}\caption{Inputs for test 1: one example observed data map, the mask, and the inverse-noise-variance map (Mollweide; unobserved pixels grey).}\label{fig:val1_inputs}\end{figure}
 \begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_flat_spectra.png}\caption{val1 (band-flat input): recovered bandpowers.}\end{figure}
 \begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_flat_chi2.png}\caption{val1 (band-flat input): $\chi^2$ distribution.}\end{figure}
 \begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val1_flat_pulls.png}\caption{val1 (band-flat input): pull distribution.}\end{figure}
@@ -26,6 +27,7 @@ Of the six suite/variant combinations, five have $\chi^2/\mathrm{dof}$ and KS $p
 \clearpage
 
 \subsection{Test 2: as test 1, but ivar in 8 longitude strips with the noise r.m.s.\ alternating by a factor of 2 across the observed region}
+\begin{figure}[h]\centering\includegraphics[width=\textwidth]{val2_inputs.png}\caption{Inputs for test 2: one example observed data map, the mask, and the inverse-noise-variance map (Mollweide; unobserved pixels grey).}\label{fig:val2_inputs}\end{figure}
 \begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val2_flat_spectra.png}\caption{val2 (band-flat input): recovered bandpowers.}\end{figure}
 \begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val2_flat_chi2.png}\caption{val2 (band-flat input): $\chi^2$ distribution.}\end{figure}
 \begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val2_flat_pulls.png}\caption{val2 (band-flat input): pull distribution.}\end{figure}
@@ -35,6 +37,7 @@ Of the six suite/variant combinations, five have $\chi^2/\mathrm{dof}$ and KS $p
 \clearpage
 
 \subsection{Test 3: galaxy density ($z{=}0.75$, $b{=}1$) and weak-lensing shear (sources at $z{=}1.5$; 15 gal/arcmin$^2$, shape noise 0.3), \texttt{pyccl} theory}
+\begin{figure}[h]\centering\includegraphics[width=\textwidth]{val3_inputs.png}\caption{Inputs for test 3: one example observed data map, the mask, and the inverse-noise-variance map (Mollweide; unobserved pixels grey).}\label{fig:val3_inputs}\end{figure}
 \begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val3_flat_spectra.png}\caption{val3 (band-flat input): recovered bandpowers.}\end{figure}
 \begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val3_flat_chi2.png}\caption{val3 (band-flat input): $\chi^2$ distribution.}\end{figure}
 \begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val3_flat_pulls.png}\caption{val3 (band-flat input): pull distribution.}\end{figure}

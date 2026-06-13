@@ -154,6 +154,57 @@ def validation_section():
             "penalty discussed in \\S\\ref{sec:fisher}; the two engines "
             "agree on the response matrix itself to the expected "
             "$\\sqrt{2/N_{\\rm sims}}$ accuracy.\n")
+
+    vx = jload("val2x_summary.json")
+    if vx:
+        out.append(
+            "\n\\subsection{Fisher three ways and x-factors (val2 setup)}\n"
+            "Using the val2 configuration (CMB $T/Q/U$, anisotropic "
+            f"longitude-strip noise, $N_{{\\rm side}}={vx['nside']}$, "
+            f"$\\ell_{{\\max}}={vx['lmax']}$), the response matrix computed "
+            "by the three engines agrees closely: relative to the exact "
+            "$R^{-1}$, the corr-normalized residual r.m.s.\\ is "
+            f"{vx['fisher_resid_rms_sub']:.3f} for column-subsampling "
+            f"($f={vx['sub_frac']}$) and {vx['fisher_resid_rms_mc']:.3f} for "
+            f"Monte Carlo ($N_{{\\rm sims}}={vx['nsims_mc']}$) "
+            f"({vx['fisher_resid_rms_mc'] / vx['fisher_resid_rms_sub']:.1f}"
+            "$\\times$ noisier at comparable cost), confirming "
+            "\\S\\ref{sec:fishercost} at the validation scale "
+            "(Fig.~\\ref{fig:val2x_fisher}).\n")
+        out.append(
+            "\\begin{figure}[h]\\centering"
+            "\\includegraphics[width=\\textwidth]{val2x_fisher_3way.png}"
+            "\\caption{Response (Fisher) matrix three ways at the val2 "
+            "setup: (a) per-band TT errors overlay; (b) all $R^{-1}$ "
+            "elements vs the exact engine; (c) residual distribution --- "
+            "column-subsampling is several times tighter than Monte Carlo "
+            "at comparable cost.}\\label{fig:val2x_fisher}\\end{figure}\n")
+        out.append(
+            "Expressing the bandpower likelihood with BJK x-factors "
+            "($Z_b=\\ln(\\hat c_b+x_b)$, autos only) improves the agreement "
+            "of the goodness-of-fit statistic with $\\chi^2_{\\rm dof}$: the "
+            f"KS $p$-value rises from {vx['ks_gauss']:.3f} (plain Gaussian "
+            f"$\\chi^2$) to {vx['ks_lognorm']:.3f} (offset-lognormal), the "
+            "Gaussian's heavy upper tail (from upward auto-power "
+            "fluctuations) being removed by the log transform "
+            "(Fig.~\\ref{fig:val2x_chi2}).  The transform symmetrizes the "
+            "signal-dominated bands and can mildly over-correct "
+            "noise-dominated ones; with strong mask-induced band coupling a "
+            "few realizations have $\\hat c_b+x_b$ driven near zero in some "
+            "band (the offset-lognormal assumes weakly-coupled bands), "
+            "producing the rare upper-$\\chi^2$ outliers noted on the "
+            "figure.\n")
+        out.append(
+            "\\begin{figure}[h]\\centering"
+            "\\includegraphics[width=.92\\textwidth]{val2x_xfactor_chi2.png}\\\\"
+            "\\includegraphics[width=.92\\textwidth]"
+            "{val2x_xfactor_mechanism.png}"
+            "\\caption{Top: bandpower $\\chi^2$ against the true spectrum "
+            "with and without x-factors.  Bottom: per-auto-band skewness "
+            "before/after the $\\ln(c+x)$ transform (left; points below the "
+            "line are symmetrized) and the standardized residual of the "
+            "most signal-dominated band (right).}"
+            "\\label{fig:val2x_chi2}\\end{figure}\n")
     return "".join(out)
 
 

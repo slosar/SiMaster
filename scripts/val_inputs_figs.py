@@ -46,13 +46,15 @@ def panel(datamap, mask, ivar, tag, title, data_label, data_unit,
     # mask: observed (w=1) bright, unobserved dark, explicit range
     hp.mollview(mask, sub=(1, 3, 2), title="mask $w$ (white = observed)",
                 cmap="gray", min=0, max=1)
-    # 0-anchored so uniform ivar (min==max) still renders a sane colorbar
+    # uniform: 0-anchor (min==max would break the colorbar); non-uniform:
+    # stretch to the observed range so even a few-percent modulation shows
     uniform = np.allclose(ivlim, ivlim.flat[0])
+    vmin, vmax = (0.0, ivlim.max() * 1.05) if uniform \
+        else (ivlim.min(), ivlim.max())
     hp.mollview(masked(ivar, mask), sub=(1, 3, 3),
                 title="inverse noise variance"
                 + (" (uniform)" if uniform else ""),
-                unit=ivar_unit, cmap="viridis",
-                min=0.0, max=ivlim.max() * 1.05)
+                unit=ivar_unit, cmap="viridis", min=vmin, max=vmax)
     fig.suptitle(title, fontsize=12, y=1.02)
     fig.savefig(os.path.join(FIGDIR, f"{tag}_inputs.png"), dpi=130,
                 bbox_inches="tight")
@@ -83,25 +85,33 @@ panel(d2, mask, ivar2, "val2",
       r"($\times2$ rms variation)",
       r"observed $T$", r"$\mu$K", r"$\mu$K$^{-2}$")
 
-# ---- test 3: LSS density + shear (pyccl) ---------------------------------
+# ---- test 3: LSS density + shear (pyccl), varying source-count ivar -------
 import pyccl as ccl
 cosmo = ccl.Cosmology(Omega_c=0.25, Omega_b=0.05, h=0.67, sigma8=0.81,
                       n_s=0.96)
-z = np.linspace(0.01, 3.0, 400)
+z = np.linspace(0.01, 4.0, 600)
 nz_l = np.exp(-0.5 * ((z - 0.75) / 0.05) ** 2)
-nz_s = np.exp(-0.5 * ((z - 1.50) / 0.05) ** 2)
+nz_cnt = np.exp(-0.5 * ((z - 2.0) / 0.1) ** 2)
+ells = np.arange(LMAX + 1)
 tr_g = ccl.NumberCountsTracer(cosmo, has_rsd=False, dndz=(z, nz_l),
                               bias=(z, np.ones_like(z)))
-ells = np.arange(LMAX + 1)
+tr_cnt = ccl.NumberCountsTracer(cosmo, has_rsd=False, dndz=(z, nz_cnt),
+                                bias=(z, np.ones_like(z)))
 cl_gg = ccl.angular_cl(cosmo, tr_g, tr_g, ells); cl_gg[:2] = 0.0
+cl_cnt = ccl.angular_cl(cosmo, tr_cnt, tr_cnt, ells); cl_cnt[:2] = 0.0
 pixarcmin2 = hp.nside2pixarea(NSIDE, degrees=True) * 3600.0
-ngal_pix = 15.0 * pixarcmin2
-ivar3 = np.full(npix, ngal_pix)
+ngal_mean = 15.0 * pixarcmin2
+shape_noise = 0.3
+# the shear ivar follows the non-uniform source count ngal = nbar (1+delta_z2)
+np.random.seed(424242)                       # same map as val3_lss.py
+delta_cnt = hp.synfast(cl_cnt, NSIDE, lmax=LMAX)
+ngal_src = ngal_mean * np.clip(1.0 + delta_cnt, 1e-3, None)
+ivar_s = ngal_src / shape_noise ** 2
 g = hp.synfast(cl_gg, NSIDE, lmax=LMAX)
-d3 = mask * g + rng.normal(0, 1, npix) / np.sqrt(ivar3)
-panel(d3, mask, ivar3, "val3",
-      r"Test 3 inputs: galaxy overdensity $\delta$ (lens, $z=0.75$); "
-      r"shear field analogous",
-      r"observed $\delta$", "", r"gal/pix")
+d3 = mask * g + rng.normal(0, 1, npix) / np.sqrt(np.full(npix, ngal_mean))
+panel(d3, mask, ivar_s, "val3",
+      r"Test 3 inputs: galaxy overdensity $\delta$ (lens); shear $ivar$ "
+      r"$\propto$ source count $\bar n(1+\delta_{z=2})$ (non-uniform)",
+      r"observed $\delta$", "", r"sources/pix $\,/\,\sigma_e^2$")
 
 print("done")

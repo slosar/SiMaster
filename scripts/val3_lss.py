@@ -49,7 +49,7 @@ rng = np.random.default_rng(20260613)
 import pyccl as ccl
 cosmo = ccl.Cosmology(Omega_c=0.25, Omega_b=0.05, h=0.67, sigma8=0.81,
                       n_s=0.96)
-z = np.linspace(0.01, 3.0, 400)
+z = np.linspace(0.01, 4.0, 600)
 nz_lens = np.exp(-0.5 * ((z - 0.75) / 0.05) ** 2)
 nz_src = np.exp(-0.5 * ((z - 1.50) / 0.05) ** 2)
 tr_g = ccl.NumberCountsTracer(cosmo, has_rsd=False, dndz=(z, nz_lens),
@@ -63,15 +63,31 @@ for c in (cl_gg, cl_gk, cl_kk):
     c[:2] = 0.0
 cl_bb = np.zeros(lmax + 1)
 
+# source-count modulation field at z=2 (bias=1): the observed source
+# density is not uniform but traces large-scale structure
+nz_cnt = np.exp(-0.5 * ((z - 2.0) / 0.1) ** 2)
+tr_cnt = ccl.NumberCountsTracer(cosmo, has_rsd=False, dndz=(z, nz_cnt),
+                                bias=(z, np.ones_like(z)))
+cl_cnt = ccl.angular_cl(cosmo, tr_cnt, tr_cnt, ells); cl_cnt[:2] = 0.0
+
 # ----------------------------------------------------------------- noise --
 mask = load_mask(nside)
 pixarea_arcmin2 = hp.nside2pixarea(nside, degrees=True) * 3600.0
-ngal_pix = args.ngal_arcmin2 * pixarea_arcmin2
-sigma_gamma = args.shape_noise / np.sqrt(ngal_pix)   # per Q/U component
-ivar_g = np.full(npix, ngal_pix)                     # delta noise var = 1/ngal
-ivar_s = np.full(npix, 1.0 / sigma_gamma ** 2)
+ngal_mean = args.ngal_arcmin2 * pixarea_arcmin2          # mean sources/pixel
+
+# fixed source-count map ngal = ngal_mean * (1 + delta_z2), drawn ONCE so the
+# noise model (hence the Fisher) is fixed across realizations.  shear noise
+# per Q/U pixel = shape_noise / sqrt(ngal)  ->  ivar_s = ngal / shape_noise^2.
+np.random.seed(424242)                       # reproducible source-count map
+delta_cnt = hp.synfast(cl_cnt, nside, lmax=lmax)
+ngal_src = ngal_mean * np.clip(1.0 + delta_cnt, 1e-3, None)
+ivar_s = ngal_src / args.shape_noise ** 2
+# lens galaxy density field keeps its (uniform) shot noise, ivar_g = ngal
+ivar_g = np.full(npix, ngal_mean)
+sigma_s = args.shape_noise / np.sqrt(ngal_src)           # per-pixel, per Q/U
 print(f"[{args.tag}] nside={nside} lmax={lmax} fsky={mask.mean():.3f} "
-      f"ngal/pix={ngal_pix:.0f} sigma_gamma={sigma_gamma:.2e}")
+      f"ngal_mean/pix={ngal_mean:.0f} source-count rms={delta_cnt.std():.3f} "
+      f"(min {1 + delta_cnt.min():.2f}, max {1 + delta_cnt.max():.2f}) x mean")
 
 bins = sm.Bins.linear(2, lmax, args.nlb)
 results = {}
@@ -104,8 +120,8 @@ for variant in args.variants.split(","):
                              new=True)
         maps_g.append(mask * g + rng.normal(0, 1, npix) / np.sqrt(ivar_g))
         maps_s.append(np.array([
-            mask * q + rng.normal(0, sigma_gamma, npix),
-            mask * u + rng.normal(0, sigma_gamma, npix)]))
+            mask * q + rng.normal(0, 1, npix) * sigma_s,
+            mask * u + rng.normal(0, 1, npix) * sigma_s]))
     data = w.pack_data([np.array(maps_g), np.array(maps_s)])
     res = w.estimate(data, deviations=(variant == "dev"))
 

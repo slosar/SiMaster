@@ -28,7 +28,11 @@ def validation_section():
                  "region"),
         "val3": ("galaxy density ($z{=}0.75$, $b{=}1$) and weak-lensing "
                  "shear (sources at $z{=}1.5$; 15 gal/arcmin$^2$, shape "
-                 "noise 0.3), \\texttt{pyccl} theory"),
+                 "noise 0.3), \\texttt{pyccl} theory.  The shear ivar is "
+                 "\\emph{non-uniform}, following the observed source count "
+                 "$n_{\\rm gal}=\\bar n(1+\\delta)$ with $\\delta$ a fixed "
+                 "Gaussian field from the $z{=}2$ density power spectrum "
+                 "($\\sim$2\\% rms); the lens shot noise is uniform"),
     }
     out.append(
         "All suites: $N_{\\rm side}=32$, $\\ell_{\\max}=64=2N_{\\rm side}$ "

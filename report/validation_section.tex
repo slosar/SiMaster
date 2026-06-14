@@ -8,8 +8,8 @@ val1 & band-flat & 45.3 & 48 & 0.009 & +0.004 & 0.972 \\
 val1 & smooth & 48.2 & 48 & 0.712 & -0.005 & 1.001 \\
 val2 & band-flat & 46.5 & 48 & 0.085 & -0.027 & 0.984 \\
 val2 & smooth & 48.5 & 48 & 0.570 & -0.006 & 1.004 \\
-val3 & deviations (smooth fid.) & 47.4 & 48 & 0.769 & -0.005 & 0.992 \\
-val3 & band-flat & 48.1 & 48 & 0.770 & +0.007 & 0.991 \\
+val3 & deviations (smooth fid.) & 46.2 & 48 & 0.062 & -0.013 & 0.979 \\
+val3 & band-flat & 47.9 & 48 & 0.300 & -0.054 & 1.000 \\
 \bottomrule
 \end{tabular}
 \caption{Validation summary.  The KS $p$-value compares the per-realization $\chi^2$ values to the $\chi^2_{\rm dof}$ distribution; pulls are per-band normalized residuals over all spectra, bands and realizations (expected: mean 0, std 1).}
@@ -36,7 +36,7 @@ Of the six suite/variant combinations, five have $\chi^2/\mathrm{dof}$ and KS $p
 \begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val2_curved_pulls.png}\caption{val2 (smooth input): pull distribution.}\end{figure}
 \clearpage
 
-\subsection{Test 3: galaxy density ($z{=}0.75$, $b{=}1$) and weak-lensing shear (sources at $z{=}1.5$; 15 gal/arcmin$^2$, shape noise 0.3), \texttt{pyccl} theory}
+\subsection{Test 3: galaxy density ($z{=}0.75$, $b{=}1$) and weak-lensing shear (sources at $z{=}1.5$; 15 gal/arcmin$^2$, shape noise 0.3), \texttt{pyccl} theory.  The shear ivar is \emph{non-uniform}, following the observed source count $n_{\rm gal}=\bar n(1+\delta)$ with $\delta$ a fixed Gaussian field from the $z{=}2$ density power spectrum ($\sim$2\% rms); the lens shot noise is uniform}
 \begin{figure}[h]\centering\includegraphics[width=\textwidth]{val3_inputs.png}\caption{Inputs for test 3: one example observed data map, the mask, and the inverse-noise-variance map (Mollweide; unobserved pixels grey).}\label{fig:val3_inputs}\end{figure}
 \begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val3_flat_spectra.png}\caption{val3 (band-flat input): recovered bandpowers.}\end{figure}
 \begin{figure}[h]\centering\includegraphics[width=.78\textwidth]{val3_flat_chi2.png}\caption{val3 (band-flat input): $\chi^2$ distribution.}\end{figure}

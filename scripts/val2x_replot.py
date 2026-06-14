@@ -41,7 +41,7 @@ snr = c_tgt / sig_emp
 chi2_Zv = chi2_Z[valid]
 ks_G = stats.kstest(chi2_G, lambda v: stats.chi2.cdf(v, dof)).pvalue
 ks_Z = stats.kstest(chi2_Zv, lambda v: stats.chi2.cdf(v, dof)).pvalue
-nside = int(d["ells"].size and 32)
+nside = json.load(open(os.path.join(DATADIR, f"{tag}_summary.json")))["nside"]
 
 # ------------------------------------------------------------- chi2 figure
 x_hi = dof + 6 * np.sqrt(2 * dof)

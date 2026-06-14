@@ -17,8 +17,9 @@ from .qml import QMLWorkspace, BandpowerResult
 from .compat import compute_full_master
 from .utils import cl_matrix, RealAlmIndex
 from .radical import compress, CompressedLikelihood
+from . import score  # field-level likelihood score / autodiff (advanced)
 
 __version__ = "0.1.0"
 __all__ = ["Field", "Bins", "QMLWorkspace", "BandpowerResult",
            "compute_full_master", "cl_matrix", "RealAlmIndex",
-           "compress", "CompressedLikelihood"]
+           "compress", "CompressedLikelihood", "score"]

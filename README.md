@@ -42,8 +42,16 @@ cov = result.cov                                # bandpower covariance
 - flat-in-`C_l` bandpowers on arbitrary (non-)uniform `l` bins, with junk
   bands covering the rest of the modelled range to prevent aliasing of
   unbinned power
+- a smooth (curved-in-`l`) fiducial can be kept inside the covariance while
+  only flat band *deviations* are fitted (`estimate(deviations=True)`)
+- three response/Fisher engines: `exact` (deterministic, batched-CG mode
+  probing), `subsampled` (unbiased column subsampling — several × cheaper
+  than Monte Carlo at fixed accuracy), and `mc` (scales to nside 1024)
 - single estimation around a fiducial spectrum, or Newton–Raphson-style
-  iteration (`QMLWorkspace.iterate`)
+  iteration (`QMLWorkspace.iterate`); around-fiducial sim-debiased estimator
+- Bond–Jaffe–Knox radical compression to `{c_hat, x, F}` with an
+  offset-lognormal likelihood (`simaster.compress`), and field-level
+  likelihood scores / autodiff (`simaster.score`)
 - two exact SHT backends: `dense` (precomputed real-SH synthesis matrices;
   everything is GPU GEMM — best for nside <= 64) and `ducc` (matrix-free,
   scales to nside 1024+)

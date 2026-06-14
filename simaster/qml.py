@@ -497,7 +497,7 @@ class QMLWorkspace:
             cols.append(arr[:, :, f.obs_pix].reshape(arr.shape[0], -1))
         return jnp.asarray(np.concatenate(cols, axis=1).T)
 
-    def estimate(self, data=None, predict_for=None, deviations=False):
+    def estimate(self, data=None, deviations=False):
         """Estimate bandpowers.
 
         data : None (use the fields' own maps), a (nrow, B) matrix from

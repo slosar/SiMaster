@@ -22,14 +22,19 @@ pixel-covariance matrix is ever built or inverted: the inverse-covariance
 filter is applied by preconditioned conjugate gradients whose operator costs
 two spherical-harmonic transforms, batched over hundreds of right-hand sides
 on a GPU.  The bandpower response (Fisher) matrix, noise bias and window
-functions are obtained either \emph{exactly}, by batched-CG probing of all
-harmonic modes (the default up to $N_{\rm side}\simeq 64$), or by a
-Monte-Carlo engine that scales to $N_{\rm side}=1024$.  We validate the
-estimator on three suites of 100 simulations at $N_{\rm side}=32$ (CMB
-$T/Q/U$ with uniform and with strongly anisotropic noise, and galaxy
-density $\times$ weak lensing with \texttt{pyccl} theory spectra), verify
-$\chi^2$ distributions of the recovered bandpowers, and benchmark the cost
-drivers to project the requirements of an $N_{\rm side}=1024$ analysis.
+functions are obtained by one of three engines: \emph{exactly}, by
+batched-CG probing of all harmonic modes (the default up to
+$N_{\rm side}\simeq 64$); by an unbiased \emph{column-subsampled} variant of
+the same that is several times cheaper than Monte Carlo at fixed accuracy;
+or by a \emph{Monte-Carlo} engine that scales to $N_{\rm side}=1024$.  We
+validate the estimator on three suites of 100 simulations at
+$N_{\rm side}=32$ (CMB $T/Q/U$ with uniform and with strongly anisotropic
+noise, and galaxy density $\times$ weak lensing with \texttt{pyccl} theory
+spectra and a non-uniform source-count noise model), verify $\chi^2$
+distributions of the recovered bandpowers, and benchmark the cost drivers
+to project the requirements of an $N_{\rm side}=1024$ analysis.  We also
+provide field-level likelihood scores via autodiff and Bond--Jaffe--Knox
+radical compression of the output.
 \end{abstract}
 
 \tableofcontents

@@ -61,9 +61,10 @@ class DeflationSpace:
         as given -- orthonormalize beforehand for a well-conditioned ``E``).
 
     Holds ``W``, ``AW = C W`` (k operator applies, done once) and the
-    Cholesky factor of ``E = Wᵀ C W``, and exposes the matrix-free coarse
-    correction ``Q`` and the deflation projectors ``P`` and ``Pᵀ`` -- all
-    cheap dense algebra, no further operator applies.
+    (symmetrized) coarse operator ``E = Wᵀ C W`` plus a precomputed dense
+    inverse ``E_inv``, and exposes the matrix-free coarse correction ``Q`` and
+    the deflation projectors ``P`` and ``Pᵀ`` -- all cheap dense algebra, no
+    further operator applies.
     """
 
     def __init__(self, apply_A, W):

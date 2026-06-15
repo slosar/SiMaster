@@ -21,11 +21,8 @@ Given a deflation basis ``W`` (n x k, full column rank) spanning those slow
 directions, define the (Galerkin) coarse operator and projectors
 
     E   = Wᵀ C W            (k x k, SPD),     Q  = W E^-1 Wᵀ,
-    P   = I - C Q,          Pᵀ = I - Q C.
-
 Deflated CG solves the deflated system ``P C x̃ = P b`` (whose effective
-condition number drops by deflating the small eigenvalues) and reconstructs
-
+condition number drops by deflating the extreme/outlying eigenvalues) and reconstructs
     x = Q b + Pᵀ x̃.
 
 This is **exact** for any full-rank ``W``: ``C x = b`` holds the moment the

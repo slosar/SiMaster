@@ -172,6 +172,8 @@ def build_deflation(apply_A, apply_M, n, k, steps=None, n_probes=1, seed=0,
     stacks the Ritz vectors, re-orthonormalizes, and wraps the result.  More
     probes broaden the captured subspace at linear cost.
     """
+    if n_probes < 1:
+        raise ValueError("n_probes must be >= 1")
     steps = steps or max(2 * k + 10, 40)
     key = jax.random.PRNGKey(seed)
     cols = []
@@ -180,7 +182,6 @@ def build_deflation(apply_A, apply_M, n, k, steps=None, n_probes=1, seed=0,
         probe = jax.random.normal(sub, (n, 1), dtype=jnp.float64)
         W, _ = harvest_ritz(apply_A, apply_M, probe, k, steps, tol=tol)
         cols.append(W)
-    W = cols[0] if len(cols) == 1 else jnp.concatenate(cols, axis=1)
     if W.shape[1] > k:                                      # trim to k via QR
         W, _ = jnp.linalg.qr(W)
         W = W[:, :k]

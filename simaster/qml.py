@@ -335,8 +335,8 @@ class QMLWorkspace:
         precomputes the coarse operator (see :mod:`simaster.deflation`).
         Called automatically before the response loop when ``deflation > 0``;
         also exposed so a deflation space can be (re)built explicitly, e.g.
-        after :meth:`update_fiducial`.  Returns the iteration count of the
-        harvest probe."""
+        after :meth:`update_fiducial`.  Returns the size ``k`` of the built
+        deflation space (0 if disabled)."""
         k = self.deflation if k is None else int(k)
         if k <= 0:
             self._defl = None

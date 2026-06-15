@@ -67,13 +67,20 @@ def deflated_pcg(apply_A, apply_M, B, defl, tol=1e-6, maxiter=500):
     result equals plain CG's to tolerance for any full-rank deflation basis --
     only the iteration count differs.  The per-iteration cost is one operator
     apply (as in ``pcg``) plus the projector ``P`` (small dense GEMMs, no
-    SHTs).  ``info`` matches ``pcg``: (niter, max rel. deflated residual,
-    indefinite)."""
+    SHTs).  ``info`` matches ``pcg``: (niter, max rel. residual, indefinite) --
+    and because ``C x − B = −R`` exactly here, that relative residual is the
+    true ``‖C x − B‖_M/‖B‖_M`` of the original system, not the deflated one."""
     Qb = defl.coarse(B)                       # coarse-grid component, Q B
     R = defl.project(B)                       # r0 = P B  (x̃_0 = 0)
     Z = apply_M(R)
     P = Z
     rz = jnp.sum(R * Z, axis=0)
+    # Normalize by the ORIGINAL RHS ‖B‖_M, not the deflated ‖P B‖_M: the
+    # reconstruction x = Q b + Pᵀ x̃ gives  C x_k − B = −R_k  exactly (R is the
+    # deflated residual), so ‖R_k‖_M/‖B‖_M is the *true* relative residual of
+    # C x = B -- identical in meaning to ``pcg`` and to what ``solve_C``
+    # reports.  (‖P B‖_M is not even a valid normalizer: P is C-orthogonal, not
+    # M-orthogonal, so ‖P B‖_M can exceed ‖B‖_M.)
     bnorm = jnp.sqrt(jnp.clip(jnp.sum(B * apply_M(B), axis=0), 0))
     bnorm = jnp.where(bnorm == 0, 1.0, bnorm)
 

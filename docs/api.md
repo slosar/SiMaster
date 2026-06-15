@@ -30,6 +30,8 @@ Precomputes everything tied to (fields, fiducial, bins). Important options:
 | `template_alpha` | None | None = exact Woodbury deprojection; finite = add `alpha*tr(C)/||t||^2 t t^T` |
 | `deproject_low_ell` | True | marginalize monopole+dipole of spin-0 fields |
 | `cg_tol`, `cg_maxiter` | 1e-5, 700 | inverse-covariance solver |
+| `deflation` | 0 | `k>0`: deflated/recycled CG — project the `k` slowest eigen-directions of `P⁻¹C` (harvested once) out of every solve; same result, ~1.5–2× fewer iters (method.md) |
+| `deflation_steps`, `deflation_probes` | None, 1 | harvest Lanczos steps (default `~max(2k+10,40)`) and number of random probes |
 | `batch_size` | 256 | RHS per GPU batch |
 | `cachedir` | None | disk cache for dense synthesis matrices |
 | `seed` | 1234 | MC reproducibility |
@@ -47,6 +49,11 @@ Methods:
   n_sims_noise=None)` — force the response computation (an engine is run
   automatically on first `estimate`). `sample_frac=f` gives the subsampled
   engine directly.
+- `build_deflation(k=None, steps=None, n_probes=None, seed=0)` — (re)build
+  the deflated/recycled-CG subspace from the current `C` (harvested by
+  recycling a short instrumented solve); called automatically before the
+  response loop when `deflation>0`, exposed for manual rebuilds (e.g. after
+  `update_fiducial`). Same solutions, fewer CG iterations (method.md).
 - `run_mean_debias(n_sims=128)` — compute the fiducial-sim mean for the
   around-fiducial (sim-debiased) estimator `ĉ = c_fid + R⁻¹(y − ⟨y⟩)`,
   needed to deflate stochastic-`R̂` error for the subsampled/MC engines
@@ -79,6 +86,17 @@ Returned by `QMLWorkspace.exact_hessian`. Holds the full-band `c0`, `grad`,
 `(−hess)⁻¹`; `fisher_estimate(user_bands=True)` uses `F` instead (always SPD).
 With `user_bands=True` the junk bands are marginalized (full inverse, then
 restrict).
+
+## `simaster.DeflationSpace` / `build_deflation` / `harvest_ritz` (advanced)
+
+Deflated/recycled CG primitives (also reachable through
+`QMLWorkspace(deflation=k)`). `harvest_ritz(apply_A, apply_M, probe, k, m)`
+recycles a short instrumented PCG run into the `k` largest-Ritz vectors of
+`P⁻¹C` (the slow directions); `build_deflation(apply_A, apply_M, n, k, ...)`
+wraps that into a `DeflationSpace`, which precomputes the coarse operator
+`E=WᵀCW` and exposes the projectors used by `simaster.cg.deflated_pcg` /
+`solve_C(..., deflation=...)`. The solve is exact for any full-rank basis —
+only the iteration count depends on `W` (see method.md).
 
 ## `simaster.compute_full_master(f1, f2, bins, cl_guess=..., **opts)`
 

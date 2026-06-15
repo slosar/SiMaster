@@ -126,6 +126,51 @@ Uniform-weight problems converge in $\sim$10 iterations at
 $10^{-5}$ tolerance; the factor-2 anisotropic-noise validation costs
 $\sim$2--3$\times$ more.
 
+\subsection{Deflated / recycled CG}
+\label{sec:deflation}
+Every Fisher engine (\S\ref{sec:fisher}) applies $M=\C^{-1}$ to
+\emph{thousands} of right-hand sides that all share the same $\C$, so
+removing the slow directions from the CG iteration once and reusing them
+multiplies the throughput of all of them.  Because the preconditioner is a
+guaranteed upper bound, $P^{-1}\succeq\C^{-1}$ (equivalently $\C\succeq P$),
+every eigenvalue of the preconditioned operator $P^{-1}\C$ is $\ge1$: the
+bulk sits at $1$ and a thin tail of \emph{large} eigenvalues --- the few
+cut-sky / anisotropic-noise modes the isotropic bound over-corrects ---
+sets the condition number.  These are the directions to deflate.
+
+Given a basis $W$ ($N_{\rm row}\times k$) spanning that tail, with the
+Galerkin coarse operator $E=W^{\sf T}\C W$, coarse correction
+$Q=W E^{-1}W^{\sf T}$ and projector $\Pi = I-\C Q$, deflated CG solves the
+deflated system $\Pi\C\,\tilde x = \Pi b$ (whose effective condition number
+drops by the deflated eigenvalues) and reconstructs
+\begin{equation}
+  x \;=\; Q\,b \;+\; \Pi^{\sf T}\tilde x .
+  \label{eq:deflrecon}
+\end{equation}
+This is \emph{exact for any full-rank $W$}: once the deflated residual
+$\Pi(b-\C\tilde x)$ vanishes, $b-\C\tilde x\in\mathrm{range}(\C W)=\ker\Pi$,
+so $\C x=(I-\Pi)b+\Pi b=b$.  The deflation space changes only the
+\emph{speed}, never the answer (tested against plain CG to CG tolerance).
+The per-iteration overhead is one projector
+$\Pi v=v-(\C W)E^{-1}(W^{\sf T}v)$: with $\C W$ precomputed (k operator
+applies) and a dense $k\times k$ inverse stored (a LAPACK \texttt{cho\_solve}
+inside the CG \texttt{while\_loop} costs more than the SHT itself), it is
+small GEMMs and \emph{no extra SHTs}.
+
+$W$ is obtained by \emph{recycling} the Krylov information of a short
+instrumented solve: preconditioned CG implicitly runs Lanczos on $P^{-1}\C$,
+so the Ritz vectors of its tridiagonal approximate the eigenvectors of
+$P^{-1}\C$, and the \emph{largest} Ritz vectors are the slow modes (Lanczos
+resolves well-separated extreme eigenvalues first, so a $\sim2k$-step run
+captures them).  On a masked, factor-anisotropic $N_{\rm side}=16$ problem
+the harvested space matches the optimal (dense largest-eigenvector)
+deflation of the same $k$ and cuts CG from $484$ to $259$ iterations
+($1.9\times$; $1.83\times$ wall-time on the dense backend), the one-off
+harvest amortizing after $\sim1$ solve.  Enabled with
+\texttt{QMLWorkspace(deflation=$k$)} (off by default); the relative gain is
+larger for the matrix-free \texttt{ducc}/\texttt{s2fft} backends, where each
+iteration is an SHT and the dense projector is negligible.
+
 \subsection{Response matrix, noise bias, windows}
 \label{sec:fisher}
 Three engines, validated against each other and against a brute-force dense

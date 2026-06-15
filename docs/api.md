@@ -51,6 +51,12 @@ Methods:
   around-fiducial (sim-debiased) estimator `ĉ = c_fid + R⁻¹(y − ⟨y⟩)`,
   needed to deflate stochastic-`R̂` error for the subsampled/MC engines
   (method.md).
+- `exact_hessian(data=None)` → `LikelihoodExpansion`. Exact gradient and
+  Hessian of the Gaussian log-likelihood in the bandpower basis at the
+  current fiducial: `∂lnL/∂c = y − ⟨y⟩` and `∂²lnL/∂c² = F − Q` with
+  `Q_AB = dᵀ C⁻¹ C_A C⁻¹ C_B C⁻¹ d` (so `E[∂²lnL] = −F`). Costs `1 + nparam`
+  CG solves; use as a pure 2nd-order likelihood expansion about a good
+  fiducial (see method.md). Use `fisher_mode='exact'` for an exact `F`.
 - `predict(cl_theory)` — window-convolved expectation of the estimates.
 - `window_functions()` — `W[(s,b),(s',l)]` with `<ĉ> = W cl`.
 - `iterate(data=None, n_iter=2, deviations=False)` — Newton–Raphson
@@ -63,6 +69,16 @@ Methods:
 
 `ells`, `cl` (dict spectrum name → `(nreal, nbands)`), `cov`, `spec_names`,
 `windows`, `ls`, `deviation`; methods `vector()`, `chi2(theory)`.
+
+## `simaster.LikelihoodExpansion`
+
+Returned by `QMLWorkspace.exact_hessian`. Holds the full-band `c0`, `grad`,
+`hess` (= `F − Q`), and `fisher` (= `F`), plus `ells`/`user_ells`/
+`is_user_band`. `newton_estimate(user_bands=True, floor=0)` →
+`(c_hat, cov)` from the Newton step `c0 + (−hess)⁻¹ grad` with covariance
+`(−hess)⁻¹`; `fisher_estimate(user_bands=True)` uses `F` instead (always SPD).
+With `user_bands=True` the junk bands are marginalized (full inverse, then
+restrict).
 
 ## `simaster.compute_full_master(f1, f2, bins, cl_guess=..., **opts)`
 

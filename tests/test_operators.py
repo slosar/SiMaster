@@ -128,6 +128,63 @@ def test_precond_is_spd():
     assert np.all(q > 0)
 
 
+def test_exact_hessian_matches_dense():
+    """grad/Hessian/Fisher from exact_hessian reproduce the dense formulas
+    H_AB = F_AB - dᵀ M C_A M C_B M d, g_A = ½dᵀMC_AMd - ½Tr(MC_A)."""
+    fields, cld = make_fields()                       # spin0 + spin2
+    idx = RealAlmIndex(2, LMAX)
+    names = sum([f.comp_names for f in fields], [])
+    clmat = sm.cl_matrix(cld, names, LMAX)
+    bins = sm.Bins.linear(2, LMAX, nlb=6)
+    ws = sm.QMLWorkspace(fields, bins, cld, lmax=LMAX, backend="dense",
+                         fisher_mode="exact", deproject_low_ell=False,
+                         verbose=False)
+    ex = ExactQML(fields, ws.bins, clmat, idx)
+    G, M = ex.G, ex.Cinv
+    K = idx.nmodes
+    rng = np.random.default_rng(3)
+    d = rng.normal(size=(ex.C.shape[0],))
+
+    # dense C_A for every (spectrum, band) parameter, workspace ordering
+    nbb = ws.bins.nbands
+    CA = []
+    for (i, j) in ws.spec_pairs:
+        for b in range(nbb):
+            sl = idx.band_slice(ws.bins.lo[b], ws.bins.hi[b])
+            Gi = G[:, i * K + sl.start: i * K + sl.stop]
+            Gj = G[:, j * K + sl.start: j * K + sl.stop]
+            CA.append(Gi @ Gi.T if i == j else Gi @ Gj.T + Gj @ Gi.T)
+    z = M @ d
+    Mz = [M @ (Ca @ z) for Ca in CA]                  # M C_A z
+    nP = len(CA)
+    F = 0.5 * np.array([[np.trace(M @ CA[A] @ M @ CA[B]) for B in range(nP)]
+                        for A in range(nP)])
+    Q = np.array([[(CA[A] @ z) @ Mz[B] for B in range(nP)] for A in range(nP)])
+    g = np.array([0.5 * z @ CA[A] @ z - 0.5 * np.trace(M @ CA[A])
+                  for A in range(nP)])
+    H_dense = F - Q
+
+    le = ws.exact_hessian(data=d[:, None])            # full band set
+    assert le.grad.shape == (nP,) and le.hess.shape == (nP, nP)
+    assert np.allclose(le.grad, g, rtol=1e-5, atol=1e-6 * np.abs(g).max())
+    assert np.allclose(le.fisher, F, rtol=1e-5, atol=1e-6 * np.abs(F).max())
+    assert np.allclose(le.hess, H_dense, rtol=1e-4,
+                       atol=1e-5 * np.abs(H_dense).max())
+    # fisher_estimate marginalizes the junk bands: invert the FULL F, then
+    # restrict -- not the user-band submatrix.
+    keep = le._keep
+    c_full = le.c0 + np.linalg.solve(le.fisher, le.grad)
+    cov_full = np.linalg.inv(le.fisher)
+    c_user, cov_user = le.fisher_estimate(user_bands=True)
+    assert np.allclose(c_user, c_full[keep], rtol=1e-9, atol=1e-12)
+    assert np.allclose(cov_user, cov_full[np.ix_(keep, keep)], rtol=1e-9)
+    # marginalizing differs from conditioning (submatrix inverse) when there
+    # are junk bands -- guards against the naive slice.
+    if keep.size < nP:
+        cond = np.linalg.inv(le.fisher[np.ix_(keep, keep)])
+        assert not np.allclose(cov_user, cond, rtol=1e-3)
+
+
 @pytest.mark.slow
 def test_sample_covariance_matches_C():
     """MC covariance of cov.sample converges to the dense C."""

@@ -52,6 +52,9 @@ cov = result.cov                                # bandpower covariance
 - Bond–Jaffe–Knox radical compression to `{c_hat, x, F}` with an
   offset-lognormal likelihood (`simaster.compress`), and field-level
   likelihood scores / autodiff (`simaster.score`)
+- exact gradient *and* Hessian of the Gaussian log-likelihood in the
+  bandpower basis (`QMLWorkspace.exact_hessian`) — a per-realization
+  second-order likelihood expansion about a fiducial, `1 + nparam` CG solves
 - three exact SHT backends: `dense` (precomputed real-SH synthesis matrices;
   everything is GPU GEMM — best for nside <= 64), `ducc` (matrix-free CPU
   transforms, scales to nside 1024+), and `s2fft` (native-JAX matrix-free

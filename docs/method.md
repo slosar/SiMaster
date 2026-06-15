@@ -243,6 +243,49 @@ engine remains the Fisher method of choice; Hessian-*vector* products cost
 and gradients w.r.t. any upstream parametrization (cosmological parameters,
 calibration, beams) chain through `clmat` for free.
 
+## Exact Hessian: second-order likelihood expansion (`exact_hessian`)
+
+`QMLWorkspace.exact_hessian(data)` returns the **exact** gradient and Hessian
+of the Gaussian log-likelihood in the bandpower basis, evaluated at the
+current fiducial `c0` for one (or a batch of) data realization(s). For
+`-2 lnL = dᵀ C⁻¹ d + ln det C` with `C(c)` *linear* in the bandpowers (so
+`C_{,ij} = 0`), writing `M = C⁻¹`:
+
+```
+∂_A lnL   = ½ dᵀ M C_A M d − ½ Tr(M C_A)          = y_A − ⟨y_A⟩
+∂²_AB lnL = F_AB − Q_AB
+   F_AB = ½ Tr(M C_A M C_B)        (the response/Fisher matrix R)
+   Q_AB = dᵀ M C_A M C_B M d = (C_A z)ᵀ M (C_B z),     z = M d.
+```
+
+Because `E[d dᵀ] = C`, `E[Q] = 2F` and hence `E[hess] = −F`, recovering the
+Fisher matrix in the mean. The point is that `exact_hessian` keeps the *data*
+term `Q` rather than its expectation, so `−hess = Q − F` is the genuine
+per-realization curvature. The gradient is exactly the QML score
+`y − n − R c_fid` of the previous section.
+
+The data term is matrix-free and cheap. With `z = M d` (one CG solve) and
+`v_A = C_A z = U E_A Uᵀ z = from_modes(E_A · to_modes(z))` (a band/spectrum
+projection in harmonic space, no new SHTs), `Q = Vᵀ M V` needs one further
+batched CG solve per band parameter — `1 + n_param` solves total, far fewer
+than the per-mode response. `C_A` here is exactly the operator behind the
+`y`-statistic (the symmetric `U_i E_b U_jᵀ + U_j E_b U_iᵀ` for a cross-band),
+so `F`, `y` and `Q` are mutually consistent and the result is validated
+against the dense `F − dᵀMC_AMC_BMd` to CG tolerance.
+
+This is meant for treating a good fiducial's first and second derivatives as
+the whole inference — a pure 2nd-order (Gaussian) expansion
+`lnL(c) ≈ lnL(c0) + grad·(c−c0) + ½(c−c0)ᵀ hess (c−c0)`. The implied MLE is
+the single Newton step `c0 + (−hess)⁻¹ grad` with parameter covariance
+`(−hess)⁻¹`; `LikelihoodExpansion.newton_estimate()` does this with the exact
+curvature, `fisher_estimate()` with `F` (always SPD). `hess`, `grad` and `F`
+span the full band set (user **and** junk bands, both real parameters); the
+estimate helpers therefore **marginalize** over the junk bands — invert the
+full matrix, then restrict — rather than conditioning on them (which slicing
+the Hessian would do). `−hess` is SPD only in expectation, so for a noisy
+realization `newton_estimate(floor=…)` clips its eigenvalues; with a good
+fiducial (`Q ≈ 2F`) it is typically already SPD.
+
 ## Radical compression (offset-lognormal likelihood, Bond–Jaffe–Knox 2000)
 
 `simaster.compress(workspace, result)` reduces a QML estimate to the BJK

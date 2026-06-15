@@ -69,6 +69,93 @@ class BandpowerResult:
         return np.einsum("bi,ij,bj->b", r, cinv, r)
 
 
+class LikelihoodExpansion:
+    r"""Exact second-order (Gaussian) expansion of the log-likelihood.
+
+        ln L(c) ≈ ln L(c0) + grad·(c - c0) + ½ (c - c0)ᵀ hess (c - c0)
+
+    in the bandpower basis, about the fiducial ``c0`` (see
+    :meth:`QMLWorkspace.exact_hessian`).  ``hess = fisher - Q`` is the *exact*
+    Hessian for one data realization; ``fisher = -E[hess]`` is the response
+    matrix, so ``-hess`` is positive definite only on average -- for a good
+    fiducial (where the data term Q ≈ 2 fisher) it usually is per realization.
+
+    All arrays span the **full** band set, i.e. the user bands *and* the junk
+    bands that tile the rest of ``[lmin, lmax]`` (both are genuine parameters
+    of ``C(c)``).  To collapse onto the user bands, use
+    :meth:`newton_estimate` / :meth:`fisher_estimate`, which *marginalize*
+    over the junk bands (invert the full matrix, then restrict) rather than
+    conditioning on them -- slicing ``hess`` directly would instead fix the
+    junk bands at the fiducial.
+
+    Attributes
+    ----------
+    ells : effective multipoles of all bands; ``user_ells`` for the user bands.
+    is_user_band : boolean mask selecting the user bands within each spectrum.
+    spec_names : spectrum order of the stacked parameter vector.
+    c0 : expansion point (fiducial bandpowers), shape (nparam,).
+    grad : ∂lnL/∂c at c0, shape (nparam,) [or (nparam, ndata)].
+    hess : ∂²lnL/∂c² at c0, shape (nparam, nparam) [or (..., ndata)].
+    fisher : response matrix F = -E[hess], shape (nparam, nparam).
+    """
+
+    def __init__(self, ells, user_ells, is_user_band, spec_names, c0,
+                 grad, hess, fisher):
+        self.ells, self.user_ells = ells, user_ells
+        self.is_user_band, self.spec_names = is_user_band, spec_names
+        self.c0, self.grad, self.hess, self.fisher = c0, grad, hess, fisher
+        nspec, nb_all = len(spec_names), is_user_band.size
+        self._keep = np.concatenate([np.flatnonzero(is_user_band) + s * nb_all
+                                     for s in range(nspec)])
+
+    def newton_estimate(self, user_bands=True, floor=0.0):
+        """MLE from one Newton step with the *exact* Hessian:
+
+            c_hat = c0 + (-hess)⁻¹ grad,   cov(c_hat) = (-hess)⁻¹.
+
+        ``floor`` (>0) clips the eigenvalues of ``-hess`` from below before
+        inverting, a safeguard when a noisy realization makes it indefinite.
+        With ``user_bands`` (default) the junk bands are marginalized out and
+        only the user bands are returned.  Returns ``(c_hat, cov)``.
+        """
+        return self._estimate(-self._as3(self.hess), user_bands, floor)
+
+    def fisher_estimate(self, user_bands=True):
+        """Standard Fisher-scoring step ``c0 + F⁻¹ grad`` with covariance
+        ``F⁻¹`` -- the ordinary QML estimate, always well posed (F ≻ 0).
+        Junk bands are marginalized when ``user_bands``.  Returns
+        ``(c_hat, cov)``."""
+        F = np.broadcast_to(self.fisher[:, :, None],
+                            self.fisher.shape + (self._nd(),))
+        return self._estimate(F, user_bands, 0.0)
+
+    def _nd(self):
+        return 1 if self.grad.ndim == 1 else self.grad.shape[1]
+
+    @staticmethod
+    def _as3(M):
+        return M[:, :, None] if M.ndim == 2 else M
+
+    def _estimate(self, A, user_bands, floor):
+        g = np.atleast_2d(self.grad.T).reshape(self._nd(), -1)
+        out = [self._solve_one(A[:, :, r], self.c0, g[r], user_bands, floor)
+               for r in range(A.shape[2])]
+        ch, cov = (np.array(x) for x in zip(*out))
+        return (ch[0], cov[0]) if A.shape[2] == 1 else (ch, cov)
+
+    def _solve_one(self, A, c0, g, user_bands, floor):
+        if floor > 0:
+            w, V = np.linalg.eigh(0.5 * (A + A.T))
+            cov = (V * (1.0 / np.clip(w, floor, None))) @ V.T
+        else:
+            cov = np.linalg.inv(A)
+        c_hat = c0 + cov @ g
+        if user_bands:                        # marginalize junk bands
+            k = self._keep
+            return c_hat[k], cov[np.ix_(k, k)]
+        return c_hat, cov
+
+
 class QMLWorkspace:
     """Precomputed QML machinery for a fixed set of fields, bins and fiducial.
 
@@ -561,6 +648,83 @@ class QMLWorkspace:
         wind = self.window_functions()[keep] if self._mc_done else None
         return BandpowerResult(self.user_bins.get_effective_ells(), cl, cov,
                                self.spec_names, windows=wind, ls=self.ls)
+
+    def exact_hessian(self, data=None):
+        r"""Exact gradient and Hessian of the Gaussian log-likelihood.
+
+        For ``-2 lnL = dᵀ C⁻¹ d + ln det C`` with the covariance ``C(c)``
+        linear in the bandpowers ``c`` (so ``C_{,AB}=0``), at the current
+        fiducial ``c0`` and for the data ``d``:
+
+            ∂_A lnL    = ½ dᵀ M C_A M d - ½ Tr(M C_A)        (= y_A - <y_A>)
+            ∂²_AB lnL  = F_AB - Q_AB,
+                F_AB = ½ Tr(M C_A M C_B)         (the response matrix R),
+                Q_AB = dᵀ M C_A M C_B M d = (C_A z)ᵀ M (C_B z),   z = M d,
+
+        with ``M = C⁻¹`` (the same deprojecting filter used throughout) and
+        ``E[Q] = 2F``, so ``E[hess] = -F``.  The data term Q is computed
+        exactly and matrix-free at the cost of ``1 + nparam`` CG solves
+        (``z``, then ``M C_A z`` for every band parameter A) -- far cheaper
+        than the per-mode response.
+
+        This is the exact second-order expansion of the likelihood about a
+        fixed fiducial: with a good fiducial one can treat ``grad`` and
+        ``hess`` as the whole inference, the implied MLE being the single
+        Newton step ``c0 + (-hess)⁻¹ grad`` with covariance ``(-hess)⁻¹``
+        (see :class:`LikelihoodExpansion`).
+
+        ``data`` is resolved as in :meth:`estimate`.  Returns a
+        :class:`LikelihoodExpansion` over the full band set (user + junk
+        bands); its ``newton_estimate`` / ``fisher_estimate`` helpers
+        marginalize onto the user bands.  A response engine is run on first
+        use; use ``fisher_mode='exact'`` for an exact ``F``.
+        """
+        if not self._mc_done:
+            if self.fisher_mode == "exact":
+                self.run_exact()
+            elif self.fisher_mode == "subsampled":
+                self.run_exact(sample_frac=self.fisher_frac)
+            else:
+                self.run_mc()
+        if data is None:
+            data = jnp.asarray(np.concatenate(
+                [f.data_vector() for f in self.fields]))[:, None]
+        elif isinstance(data, (list, tuple)):
+            data = self.pack_data(data)
+        else:
+            data = jnp.atleast_2d(jnp.asarray(data))
+            if data.shape[0] != self.cov.nrow:
+                data = data.T
+
+        z = self._filter(data)                            # M d   (nrow, B)
+        yd, _ = self._y_stats(z)                          # ½ zᵀ C_A z
+        grad_all = np.asarray(yd) - self.fiducial_yref()[:, None]
+
+        # v_A = C_A z = from_modes(E_A . to_modes(z)) for every band parameter
+        a = self.cov.to_modes(z)                          # (Nc, K, B)
+        Nc, K, B = a.shape
+        ns, nbb = len(self.spec_pairs), self.bins.nbands
+        Mc = jnp.zeros((Nc, K, ns, nbb, B), dtype=a.dtype)
+        for si, (i, j) in enumerate(self.spec_pairs):
+            for b in range(nbb):
+                sl = self.index.band_slice(self.bins.lo[b], self.bins.hi[b])
+                Mc = Mc.at[i, sl, si, b].add(a[j, sl])
+                if i != j:                                # symmetric C_A
+                    Mc = Mc.at[j, sl, si, b].add(a[i, sl])
+        V = self.cov.from_modes(Mc.reshape(Nc, K, ns * nbb * B))
+        U = self._filter(V)                               # M v_A
+        nrow = V.shape[0]
+        V = V.reshape(nrow, ns * nbb, B)
+        U = U.reshape(nrow, ns * nbb, B)
+        Q = np.asarray(jnp.einsum("pAr,pBr->ABr", V, U))  # (nparam, nparam, B)
+        Q = 0.5 * (Q + Q.transpose(1, 0, 2))              # symmetrize CG noise
+        hess = self.R_hat[:, :, None] - Q
+        if B == 1:
+            grad_all, hess = grad_all[:, 0], hess[:, :, 0]
+        return LikelihoodExpansion(
+            self.bins.get_effective_ells(), self.user_bins.get_effective_ells(),
+            self.is_user_band, self.spec_names, self.fiducial_bandpowers(),
+            grad_all, hess, self.R_hat)
 
     def window_functions(self):
         """W[(s,b), (s',l)] such that <c_hat> = W @ c_l(theory)."""

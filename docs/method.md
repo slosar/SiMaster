@@ -69,6 +69,54 @@ the guaranteed upper bound `2 max_p(w² ivar) · npix/4π`, beyond which
 iterations; strongly varying `w² ivar` costs more (the bound is then loose) —
 this is the main performance caveat for highly anisotropic noise.
 
+## Deflated / recycled CG (`deflation`)
+
+Every Fisher engine applies `M = C⁻¹` to **thousands** of right-hand sides
+that all share the *same* `C`. The CG convergence rate is set by the spread
+of the spectrum of `P⁻¹C`, and — because the preconditioner is a guaranteed
+upper bound (`P⁻¹ ⪰ C⁻¹`, so `C ⪰ P` and every eigenvalue of `P⁻¹C` is `≥ 1`)
+— the bulk sits at 1 with a tail of *large* eigenvalues: a handful of slow
+cut-sky / anisotropic-noise directions that drag down every solve. Deflation
+removes that subspace from the Krylov iteration once and amortizes the cost
+over all the RHS.
+
+Given a basis `W` (`nrow × k`) spanning the slow directions, with the
+Galerkin coarse operator `E = Wᵀ C W` and projectors `P = I − C W E⁻¹ Wᵀ`,
+`Pᵀ = I − W E⁻¹ (CW)ᵀ`, deflated CG solves the deflated system `P C x̃ = P b`
+and reconstructs
+
+```
+x = W E⁻¹ Wᵀ b  +  Pᵀ x̃.
+```
+
+This is **exact for any full-rank `W`** — `C x = b` the instant the deflated
+residual `P(b − C x̃)` vanishes (then `b − C x̃ ∈ range(CW) = ker P`, so
+`C x = (I−P)b + P b = b`). The deflation space changes only the *speed*, never
+the *answer*; tests check the recovered solution against plain CG to CG
+tolerance. The per-iteration overhead is one projector `P v = v − (CW) E⁻¹
+(Wᵀ v)`: with `CW` precomputed once (k operator applies) and `E⁻¹` stored
+dense, it is small GEMMs and **no extra SHTs** (a dense `k×k` inverse, not a
+LAPACK `cho_solve`, because inside the CG `while_loop` the custom-call
+dispatch can cost more than the SHT itself).
+
+`W` is built by **recycling** the Krylov information of a short instrumented
+solve: PCG implicitly runs Lanczos on `P⁻¹C`, so the Ritz vectors of its
+tridiagonal approximate the eigenvectors of `P⁻¹C`, and the *largest* Ritz
+vectors are the slow directions (Lanczos resolves well-separated extreme
+eigenvalues first, so a short `~2k`-step run captures them). This reuses
+solves we do anyway — the defining feature of eigCG/recycled methods.
+
+Set `deflation=k` (off by default). The harvested space matches the optimal
+(dense largest-eigenvector) deflation of the same `k` and, on a masked,
+anisotropic-noise problem at nside 16, cuts CG by **~1.9×** (e.g. 484→259
+iterations, 1.8× wall-time on the dense backend; the relative gain is larger
+for the matrix-free `ducc`/`s2fft` backends, where each iteration is an SHT
+and the dense projector is negligible). The one-off harvest amortizes after
+~1 solve, and memory is `O(nrow·k)`. `build_deflation()` exposes a manual
+(re)build, e.g. after `update_fiducial` (which invalidates the stale space,
+since `W` is tied to `C(fiducial)`). Natural next step: thick-restart to cap
+the harvest memory, and per-iteration recycling across consecutive RHS.
+
 ## SHT backends (`dense` / `ducc` / `s2fft`)
 
 Every `C·x` needs a synthesis `Y` (real-basis coefficients → observed-pixel

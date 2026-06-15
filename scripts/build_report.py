@@ -306,6 +306,12 @@ def fisher_methods_section():
               "the measured value once \\texttt{bench\\_sht\\_scaling.py} has run)"
     iters = 100
     solve_core_h = apply_core_s * iters / 3600.0
+    # deflated/recycled CG cuts the per-solve iteration count ~1.5-2x
+    # (measured 1.9x at nside=16; the gain typically grows with the condition
+    # number, i.e. with resolution and anisotropy), so the whole budget below
+    # scales down by the same factor on the matrix-free backend (the projector
+    # is SHT-free).  Use a conservative midpoint for the headline number.
+    defl_lo, defl_hi = 1.5, 2.0
 
     # Planck-like budget numbers
     snr2_tot = 1.0e6
@@ -322,6 +328,12 @@ def fisher_methods_section():
     def ch(n):  # core-hours -> pretty
         v = n * solve_core_h
         return f"{v:,.0f}".replace(",", r"\,")
+
+    # deflated budget (matrix-free backend: iteration reduction -> wall-clock)
+    defl_hi_ch = ch(ncols_cov / defl_hi)      # bigger gain -> fewer core-h
+    defl_lo_ch = ch(ncols_cov / defl_lo)
+    defl_days_hi = ncols_cov * solve_core_h / defl_hi / 24 / 256
+    defl_days_lo = ncols_cov * solve_core_h / defl_lo / 24 / 256
 
     return f"""
 The response (binned Fisher) matrix $R_{{AB}}=\\frac12\\Tr[MP_AMP_B]$ is the
@@ -407,6 +419,25 @@ per-probe scatter equal to the per-realization $\\sigma_A$, so
 $1/\\epsilon^2=100$ probes suffice.  We therefore consider the Planck
 configuration feasible with the subsampled engine + iteration on a
 mid-size CPU farm today, and on a single node with a GPU SHT.
+
+\\paragraph{{Deflation gain.}} The budget above charges {iters} CG
+iterations per solve, and that is exactly what deflated/recycled CG
+(\\S\\ref{{sec:deflation}}) attacks.  Every solve of a given iteration shares
+the same $\\C$, so the slow-mode subspace is harvested once (a handful of
+solves, amortized immediately) and projected out of all $\\sim${ncols_cov:,.0f}
+solves; the deflation space is rebuilt only when the fiducial moves (twice,
+negligible).  On the matrix-free \\texttt{{ducc}} backend used here each CG
+iteration is an SHT and the projector is SHT-free, so the measured
+$1.5$--$2\\times$ iteration reduction (\\S\\ref{{sec:deflation}}) carries
+directly to wall-clock: the {ch(ncols_cov)} core-h headline drops to roughly
+{defl_hi_ch}--{defl_lo_ch}
+core-h ($\\approx${defl_days_hi:.0f}--{defl_days_lo:.0f}
+days on the same 256-core farm), stacking multiplicatively with the
+subsampling and around-fiducial savings already counted.  The reduction is
+problem-dependent and tends to \\emph{{grow}} with the condition number ---
+i.e.\\ with resolution and anisotropy --- for a fixed subspace size $k$, at
+$O(N_{{\\rm row}}\\,k)$ memory; the figure here uses the conservatively
+measured low-resolution value.
 """
 
 

@@ -33,6 +33,7 @@ from .field import Field
 from .bins import Bins
 from .covariance import CovModel
 from .cg import pcg, solve_C
+from .deflation import build_deflation
 
 
 class BandpowerResult:
@@ -191,6 +192,16 @@ class QMLWorkspace:
         transforms that stay on the accelerator -- opt-in, needs an s2fft
         build with exact HEALPix spin-2 synthesis; see docs/method.md), or
         'auto' (dense for nside <= 64, else ducc).
+    deflation : k >= 1 turns on deflated/recycled CG: before the response
+        loop, the k slowest-converging eigen-directions of P^-1 C are
+        harvested (recycled) from a short instrumented solve and projected
+        out of every subsequent CG solve, cutting iterations at no change to
+        the result (see :mod:`simaster.deflation`).  0 (default) disables it.
+        The same C is solved for thousands of RHS, so the one-off build cost
+        amortizes immediately; memory is O(nrow * k).
+    deflation_steps : Lanczos/CG steps for the harvest (default ~max(2k+10,
+        40)); must exceed k.  deflation_probes : number of random probes
+        whose Ritz vectors are stacked (default 1; more broadens the subspace).
     """
 
     def __init__(self, fields, bins: Bins, cl_fid, lmax=None, lmin=2,
@@ -198,6 +209,7 @@ class QMLWorkspace:
                  n_sims_fisher=2048, n_sims_noise=512, cg_tol=1e-5,
                  cg_maxiter=700, seed=1234, template_alpha=None,
                  deproject_low_ell=True, batch_size=256, cachedir=None,
+                 deflation=0, deflation_steps=None, deflation_probes=1,
                  verbose=True):
         if isinstance(fields, Field):
             fields = [fields]
@@ -215,6 +227,10 @@ class QMLWorkspace:
         self.verbose = verbose
         self.cg_tol, self.cg_maxiter = cg_tol, cg_maxiter
         self.batch_size = batch_size
+        self.deflation = int(deflation)
+        self.deflation_steps = deflation_steps
+        self.deflation_probes = int(deflation_probes)
+        self._defl = None
         self.n_sims_fisher, self.n_sims_noise = n_sims_fisher, n_sims_noise
         self._key = jax.random.PRNGKey(seed)
 
@@ -304,10 +320,50 @@ class QMLWorkspace:
 
     # ------------------------------------------------------------ the filter --
     def _solve(self, B):
-        """C^-1 B by preconditioned CG (with preconditioner auto-repair)."""
+        """C^-1 B by preconditioned CG (with preconditioner auto-repair),
+        deflated/recycled when a deflation space has been built."""
         X, self.last_cg = solve_C(self.cov, B, tol=self.cg_tol,
-                                  maxiter=self.cg_maxiter, log=self._log)
+                                  maxiter=self.cg_maxiter, log=self._log,
+                                  deflation=self._defl)
         return X
+
+    def build_deflation(self, k=None, steps=None, n_probes=None, seed=0):
+        """Harvest the deflated/recycled-CG subspace from the current C.
+
+        Recycles the Krylov information of a short instrumented solve to
+        approximate the ``k`` slowest eigen-directions of ``P^-1 C`` and
+        precomputes the coarse operator (see :mod:`simaster.deflation`).
+        Called automatically before the response loop when ``deflation > 0``;
+        also exposed so a deflation space can be (re)built explicitly, e.g.
+        after :meth:`update_fiducial`.  Returns the size ``k`` of the built
+        deflation space (0 if disabled)."""
+        k = self.deflation if k is None else int(k)
+        if k <= 0:
+            self._defl = None
+            return 0
+        steps = steps or self.deflation_steps
+        n_probes = self.deflation_probes if n_probes is None else int(n_probes)
+        if n_probes < 1:
+            raise ValueError("deflation_probes (n_probes) must be >= 1")
+        t0 = time.time()
+        # Settle the preconditioner first: the harvest runs Lanczos on P^-1 C,
+        # which breaks down if P is still the indefinite mean-D form (a plain
+        # solve escalates it to its SPD bound).  _prepare_deprojection already
+        # does this when templates exist; warm up explicitly otherwise.
+        self._defl = None
+        warm = jax.random.normal(self._next_key(), (self.cov.nrow, 1), dtype=self.cov.dtype)
+        self._solve(warm)
+        self._defl = build_deflation(self.cov.apply_C, self.cov.apply_precond,
+                                     self.cov.nrow, k, steps=steps,
+                                     n_probes=n_probes, seed=seed)
+        self._log(f"deflation space built: k={self._defl.k} in "
+                  f"{time.time() - t0:.1f}s")
+        return self._defl.k
+
+    def _ensure_deflation(self):
+        """Build the deflation space on first use if requested and absent."""
+        if self.deflation > 0 and self._defl is None:
+            self.build_deflation()
 
     def _prepare_deprojection(self):
         if self.cov.Tmat is None or self._template_mode == "alpha":
@@ -372,6 +428,7 @@ class QMLWorkspace:
         conditioning.
         """
         self._prepare_deprojection()
+        self._ensure_deflation()
         Nc, K = len(self.comp_names), self.index.nmodes
         nl = self.ls.size
         lmode = np.asarray(self.index.l) - self.lmin
@@ -483,6 +540,7 @@ class QMLWorkspace:
         nf = n_sims_fisher or self.n_sims_fisher
         nn = n_sims_noise or self.n_sims_noise
         self._prepare_deprojection()
+        self._ensure_deflation()
         nb = self.bins.nbands * len(self.spec_pairs)
         nl = self.ls.size * len(self.spec_pairs)
 
@@ -762,6 +820,7 @@ class QMLWorkspace:
         clmat = psd_floor(clmat)
         self.cov.set_clmat(clmat)
         self._mc_done = False
+        self._defl = None        # stale: deflation space is tied to C(fiducial)
         self.ybar_debias = None  # stale: tied to the previous fiducial
 
     def update_fiducial_deviations(self, dc_full):
@@ -777,6 +836,7 @@ class QMLWorkspace:
         clmat = psd_floor(clmat)
         self.cov.set_clmat(clmat)
         self._mc_done = False
+        self._defl = None
         self.ybar_debias = None
 
     def iterate(self, data=None, n_iter=2, deviations=False):

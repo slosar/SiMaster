@@ -59,6 +59,44 @@ def test_backends_agree():
     assert np.allclose(a, b, rtol=1e-10, atol=1e-12 * np.abs(a).max())
 
 
+def _s2fft_cov(fields, cld):
+    """Build an s2fft-backend CovModel, or skip if unavailable/unpatched.
+
+    The 's2fft' backend self-checks against ducc0 at construction and raises
+    if the installed s2fft has the HEALPix spin-2 recursion-node bug (any
+    release <= 1.4.0), so stock CI installs skip cleanly."""
+    pytest.importorskip("s2fft")
+    try:
+        return build_cov(fields, cld, "s2fft")[0]
+    except RuntimeError as e:
+        pytest.skip(f"s2fft backend unavailable: {e}")
+
+
+def test_s2fft_backend_agrees():
+    """Native-JAX s2fft Y/Yᵀ reproduce the dense covariance operator."""
+    fields, cld = make_fields()
+    cov_d, _, _ = build_cov(fields, cld, "dense")
+    cov_s = _s2fft_cov(fields, cld)
+    rng = np.random.default_rng(5)
+    x = rng.normal(size=(cov_d.nrow, 2))
+    a = np.asarray(cov_d.apply_C(x))
+    b = np.asarray(cov_s.apply_C(x))
+    assert np.allclose(a, b, rtol=1e-9, atol=1e-11 * np.abs(a).max())
+
+
+def test_s2fft_adjoint_is_exact_transpose():
+    """⟨Y a, m⟩ = ⟨a, Yᵀ m⟩ for the s2fft synthesis (spin-2 field)."""
+    fields, cld = make_fields()
+    cov_s = _s2fft_cov(fields, cld)
+    op = cov_s._sht[-1]                       # the spin-2 field
+    rng = np.random.default_rng(11)
+    a = rng.normal(size=(op.ncol, 1))
+    m = rng.normal(size=(op.nrow, 1))
+    lhs = float(np.asarray(op.synth(a))[:, 0] @ m[:, 0])
+    rhs = float(a[:, 0] @ np.asarray(op.adjoint(m))[:, 0])
+    assert abs(lhs - rhs) <= 1e-9 * (abs(lhs) + 1e-30)
+
+
 def test_apply_C_matches_dense_matrix():
     fields, cld = make_fields()
     cov, clmat, idx = build_cov(fields, cld, "dense")

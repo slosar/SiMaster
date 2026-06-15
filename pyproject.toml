@@ -20,6 +20,11 @@ dependencies = [
 
 [project.optional-dependencies]
 gpu = ["jax[cuda12]"]
+# Native-JAX on-device SHT backend (backend='s2fft'). Needs an s2fft build
+# with exact HEALPix spin-2 synthesis; releases <= 1.4.0 have the spin
+# recursion-node bug (the backend self-checks and refuses to run on a buggy
+# build). See docs/method.md.
+s2fft = ["s2fft"]
 healsparse = ["healsparse"]
 test = ["pytest", "pytest-cov"]
 validation = ["pyccl", "matplotlib", "pymaster"]

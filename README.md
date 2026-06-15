@@ -52,9 +52,12 @@ cov = result.cov                                # bandpower covariance
 - Bond–Jaffe–Knox radical compression to `{c_hat, x, F}` with an
   offset-lognormal likelihood (`simaster.compress`), and field-level
   likelihood scores / autodiff (`simaster.score`)
-- two exact SHT backends: `dense` (precomputed real-SH synthesis matrices;
-  everything is GPU GEMM — best for nside <= 64) and `ducc` (matrix-free,
-  scales to nside 1024+)
+- three exact SHT backends: `dense` (precomputed real-SH synthesis matrices;
+  everything is GPU GEMM — best for nside <= 64), `ducc` (matrix-free CPU
+  transforms, scales to nside 1024+), and `s2fft` (native-JAX matrix-free
+  transforms that stay on the accelerator and are differentiable — opt-in,
+  needs an s2fft build with exact HEALPix spin-2 synthesis; see
+  `docs/method.md`)
 - pure Python; double precision end to end
 
 ## Install

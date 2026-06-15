@@ -23,7 +23,7 @@ Precomputes everything tied to (fields, fiducial, bins). Important options:
 |---|---|---|
 | `lmax` | `3*nside-1` | covariance bandlimit (aliasing caveat in method.md) |
 | `lmin` | 2 | lowest multipole in the band basis |
-| `backend` | auto | `'dense'` (GPU GEMM, nside≲64) or `'ducc'` (matrix-free) |
+| `backend` | auto | `'dense'` (GPU GEMM, nside≲64), `'ducc'` (matrix-free CPU), or `'s2fft'` (native-JAX on-device; opt-in, needs fixed s2fft — see method.md) |
 | `fisher_mode` | auto | `'exact'`, `'subsampled'`, or `'mc'` (see method.md) |
 | `fisher_frac` | 0.25 | fraction of mode columns solved in `'subsampled'` mode |
 | `n_sims_fisher`, `n_sims_noise` | 2048/512 | `'mc'`-mode sample sizes |

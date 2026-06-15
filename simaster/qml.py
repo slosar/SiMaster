@@ -99,8 +99,11 @@ class QMLWorkspace:
     template_alpha : None (default) -> exact deprojection (alpha -> inf,
         Woodbury); finite value -> add alpha_rel*tr(C)/||t||^2 * t t^T to C.
     deproject_low_ell : marginalize monopole+dipole of every spin-0 field.
-    backend : 'dense' (GPU GEMM, nside <~ 64), 'ducc' (matrix-free, any
-        nside), or 'auto'.
+    backend : 'dense' (GPU GEMM, nside <~ 64), 'ducc' (matrix-free CPU
+        transforms via callback, any nside), 's2fft' (native-JAX matrix-free
+        transforms that stay on the accelerator -- opt-in, needs an s2fft
+        build with exact HEALPix spin-2 synthesis; see docs/method.md), or
+        'auto' (dense for nside <= 64, else ducc).
     """
 
     def __init__(self, fields, bins: Bins, cl_fid, lmax=None, lmin=2,

@@ -12,8 +12,9 @@ matrix-free:
 
     C x = W Y B Cl B Y^T W x + x/ivar (+ template term),
 
-where Y / Y^T are either dense GEMMs on the device ("dense" backend) or
-exact ducc0 transforms through ``jax.pure_callback`` ("ducc" backend).
+where Y / Y^T are either dense GEMMs on the device ("dense" backend), exact
+ducc0 transforms through ``jax.pure_callback`` ("ducc" backend), or native
+on-device JAX transforms via s2fft ("s2fft" backend).
 
 The preconditioner is the Woodbury inverse of the isotropic approximation
 U Chat U^T + N with U^T N^-1 U replaced by its statistically averaged
@@ -44,7 +45,7 @@ class CovModel:
     clmat : (ncomp_tot, ncomp_tot, lmax+1) fiducial spectra incl. noise-free
         signal only (noise comes from ivar).
     index : RealAlmIndex shared by all fields.
-    backend : 'dense' or 'ducc'.
+    backend : 'dense', 'ducc', or 's2fft'.
     template_alpha : None for exact (Woodbury, alpha->inf) deprojection,
         or a finite number: covariance gains alpha_rel * tr(C)/(t^T t) * t t^T
         per template (the "correctly large prefactor" prescription).
@@ -88,6 +89,9 @@ class CovModel:
                 dtype=dtype) for f in fields]
         elif backend == "ducc":
             self._sht = [sht.RealSHT(self.nside, index, f.spin, f.obs_pix)
+                         for f in fields]
+        elif backend == "s2fft":
+            self._sht = [sht.S2fftSHT(self.nside, index, f.spin, f.obs_pix)
                          for f in fields]
         else:
             raise ValueError(f"unknown backend {backend!r}")
@@ -179,6 +183,8 @@ class CovModel:
             # (x^T Y)^T, not Y^T x: XLA would otherwise materialize a
             # transposed copy of Y (GBs) during autotuning
             a = (xf.T @ self.Y[i]).T
+        elif self.backend == "s2fft":
+            a = self._sht[i].adjoint(xf)              # native JAX, on device
         else:
             shape = jax.ShapeDtypeStruct((f.ncomp * self.K, xf.shape[-1]),
                                          xf.dtype)
@@ -193,6 +199,8 @@ class CovModel:
         af = af.reshape(f.ncomp * self.K, -1)
         if self.backend == "dense":
             return self.Y[i] @ af
+        if self.backend == "s2fft":
+            return self._sht[i].synth(af)             # native JAX, on device
         shape = jax.ShapeDtypeStruct((f.ncomp * f.nobs, af.shape[-1]), af.dtype)
         return jax.pure_callback(
             lambda a, op=self._sht[i]: op.synth(np.asarray(a, np.float64)),

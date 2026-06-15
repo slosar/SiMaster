@@ -69,6 +69,54 @@ the guaranteed upper bound `2 max_p(w² ivar) · npix/4π`, beyond which
 iterations; strongly varying `w² ivar` costs more (the bound is then loose) —
 this is the main performance caveat for highly anisotropic noise.
 
+## SHT backends (`dense` / `ducc` / `s2fft`)
+
+Every `C·x` needs a synthesis `Y` (real-basis coefficients → observed-pixel
+map) and its **exact transpose** `Yᵀ`. The three backends differ only in how
+that adjoint pair is realized; all agree to ~1e-13 and are interchangeable:
+
+- **`dense`** — the real-basis synthesis matrix `Y`, restricted to observed
+  pixels, is precomputed once (cached on disk) and stored on the device, so
+  every SHT is a single GEMM. Memory is `N_obs · (lmax+1)²`, so this is the
+  fastest backend for `nside ≤ 64` (≤ 256 on large GPUs). Default for
+  `nside ≤ 64`.
+- **`ducc`** — matrix-free transforms through ducc0 (the engine behind
+  healpy), exact in double precision and multithreaded on the CPU. Memory is
+  `O(N_obs)`, so it scales to `nside = 1024+`. The transform runs on the CPU
+  via `jax.pure_callback`: correct and scalable, but each SHT crosses the
+  host↔device boundary and is opaque to XLA fusion and autodiff. Default for
+  `nside > 64`.
+- **`s2fft`** — native-JAX matrix-free transforms ([s2fft](https://github.com/astro-informatics/s2fft)).
+  The synthesis is `s2fft.inverse` evaluated inside XLA, so the whole
+  `C·x` chain stays **on the accelerator** (no host round-trip) and is
+  differentiable. We build `Y` by scattering the real coefficients into
+  s2fft's 2-D `flm` layout — for spin 0 the conjugate-symmetric scalar
+  coefficients, for spin 2 the spin-(+2) coefficients `−(E + iB)` with the
+  E/B reality symmetry filling the negative-`m` half — and obtain `Yᵀ`
+  exactly as `jax.linear_transpose` of that differentiable synthesis (**not**
+  the quadrature-based `s2fft.forward`, which is only an approximate inverse
+  on HEALPix). This is the route to a GPU SHT at `nside ≳ 256` and to an
+  end-to-end differentiable likelihood; on a small fp64 GPU (or CPU-bound
+  hardware) ducc0 is still competitive, since the win is on-device locality
+  and fusion rather than raw FLOPs (see the report's feasibility section).
+
+  **Caveat — requires a fixed s2fft.** Released s2fft (≤ 1.4.0) has a
+  Wigner-d recursion-node bug: HEALPix rings sit at `cos θ` values that land
+  exactly on Wigner-d nodes for spin ≠ 0, where an intermediate
+  renormalization produces a silently-dropped NaN, so HEALPix **spin-2**
+  synthesis carries ~5–13 % pointwise error (spin-0 is unaffected, and the
+  shipped HEALPix tests only covered spin 0). This is fatal for QML, which
+  relies on exact adjoint pairs. It is fixed on the upstream branch
+  `fix/healpix-spin-recursion-node` (guard the renormalization at exact
+  nodes). `S2fftSHT` **self-checks against ducc0 at construction** and raises
+  a `RuntimeError` if the installed s2fft fails the spin-2 check, so an
+  unpatched install cannot silently produce wrong spectra. The backend is
+  therefore **opt-in** (`backend='s2fft'`), not selected by `'auto'`. Note
+  that s2fft's HEALPix `forward`→`inverse` round trip still shows the usual
+  few-percent HEALPix quadrature error — that is expected and irrelevant
+  here, because QML uses `Yᵀ` (the exact transpose), never the quadrature
+  `forward`.
+
 ## Response (Fisher), noise bias, windows
 
 Two engines:

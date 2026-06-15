@@ -89,12 +89,13 @@ def deflated_pcg(apply_A, apply_M, B, defl, tol=1e-6, maxiter=500):
     def body(state):
         X, R, Z, P, rz, it = state
         AP = defl.project(apply_A(P))         # P C p (one operator apply)
-        alpha = rz / jnp.sum(P * AP, axis=0)
+        denom = jnp.sum(P * AP, axis=0)
+        alpha = jnp.where(denom == 0, 0.0, rz / denom)
         X = X + alpha[None, :] * P
         R = R - alpha[None, :] * AP
         Z = apply_M(R)
         rz_new = jnp.sum(R * Z, axis=0)
-        beta = rz_new / rz
+        beta = jnp.where(rz == 0, 0.0, rz_new / rz)
         P = Z + beta[None, :] * P
         return X, R, Z, P, rz_new, it + 1
 

@@ -343,13 +343,15 @@ class QMLWorkspace:
             return 0
         steps = steps or self.deflation_steps
         n_probes = self.deflation_probes if n_probes is None else int(n_probes)
+        if n_probes < 1:
+            raise ValueError("deflation_probes (n_probes) must be >= 1")
         t0 = time.time()
         # Settle the preconditioner first: the harvest runs Lanczos on P^-1 C,
         # which breaks down if P is still the indefinite mean-D form (a plain
         # solve escalates it to its SPD bound).  _prepare_deprojection already
         # does this when templates exist; warm up explicitly otherwise.
         self._defl = None
-        warm = jax.random.normal(self._next_key(), (self.cov.nrow, 1))
+        warm = jax.random.normal(self._next_key(), (self.cov.nrow, 1), dtype=self.cov.dtype)
         self._solve(warm)
         self._defl = build_deflation(self.cov.apply_C, self.cov.apply_precond,
                                      self.cov.nrow, k, steps=steps,

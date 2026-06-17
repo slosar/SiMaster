@@ -1,5 +1,7 @@
 # SiMaster
 
+[![tests](https://github.com/slosar/SiMaster/actions/workflows/ci.yml/badge.svg)](https://github.com/slosar/SiMaster/actions/workflows/ci.yml)
+
 **S**pherical-harmonic **i**nverse-covariance (QML) power spectrum estimation —
 a GPU-accelerated, optimal alternative to pseudo-`C_l` codes, with a
 [NaMaster](https://github.com/LSSTDESC/NaMaster)-like interface.

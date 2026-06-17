@@ -49,6 +49,12 @@ cov = result.cov                                # bandpower covariance
 - three response/Fisher engines: `exact` (deterministic, batched-CG mode
   probing), `subsampled` (unbiased column subsampling — several × cheaper
   than Monte Carlo at fixed accuracy), and `mc` (scales to nside 1024)
+- measurable error budget for the `subsampled` engine
+  (`run_exact(sample_frac=f, keep_samples=True)` then
+  `QMLWorkspace.subsample_error()`): analytic stratified covariance + column
+  bootstrap of the subsampling error on the Fisher matrix *and* noise bias,
+  as a covariance to add to `R⁻¹` plus a per-band suboptimality diagnostic;
+  the per-mode store is checkpointable/mergeable for multi-node runs
 - single estimation around a fiducial spectrum, or Newton–Raphson-style
   iteration (`QMLWorkspace.iterate`); around-fiducial sim-debiased estimator
 - Bond–Jaffe–Knox radical compression to `{c_hat, x, F}` with an

@@ -402,7 +402,7 @@ class QMLWorkspace:
         return jnp.concatenate(ybs, axis=0), jnp.concatenate(yls, axis=0)
 
     # ----------------------------------------------------------- exact engine --
-    def run_exact(self, sample_frac=None, sample_seed=0):
+    def run_exact(self, sample_frac=None, sample_seed=0, keep_samples=False):
         """Deterministic (or column-subsampled) response computation.
 
         Solves V = M G over (comp, l, m) mode columns with batched CG and
@@ -426,6 +426,13 @@ class QMLWorkspace:
         bands coherently (offset ~ sigma_A * sqrt(SNR_tot^2/N_sims)).
         The sampled R is symmetrized; for very small f check its
         conditioning.
+
+        With ``keep_samples`` the per-mode contributions to the binned
+        response are retained as ``self._subsample_store`` (a
+        :class:`~simaster.subsample.SubsampleStore`), from which
+        :meth:`subsample_error` builds an analytic + bootstrap error budget
+        for the subsampling inaccuracy.  Costs O(ns^2 nbb nsel) extra memory
+        and a little assembly; off by default.
         """
         self._prepare_deprojection()
         self._ensure_deflation()
@@ -453,6 +460,31 @@ class QMLWorkspace:
         W2d_dev = jnp.zeros((Nc, Nc, K))
         noisevar = self.cov.noisevar
 
+        # per-mode contributions to the binned response, for the subsampling
+        # error budget (see simaster.subsample); guarded so the default path
+        # is untouched.  Each mode feeds one column band (the row multipole is
+        # summed exactly), so its slab is (ns, nbb, ns) over (A, b1, B).
+        ns = len(self.spec_pairs)
+        nbb = self.bins.nbands
+        band_of_l = np.asarray(self._band_of_l)
+        if keep_samples:
+            Pcontract = np.zeros((ns, ns, Nc, Nc, Nc, Nc))
+            for A, (c, d) in enumerate(self.spec_pairs):
+                for Bx, (e, f) in enumerate(self.spec_pairs):
+                    for (g, dd) in ([(c, d)] if c == d else [(c, d), (d, c)]):
+                        for (ee, ff) in ([(e, f)] if e == f
+                                         else [(e, f), (f, e)]):
+                            Pcontract[A, Bx, dd, g, ee, ff] += 1.0
+            Pcontract = jnp.asarray(Pcontract)
+            slab_store = np.zeros((ns, nbb, ns, nsel))
+            # per-mode noise-bias contribution: spectrum A=(c,d) reads W2d[c,d]
+            # with the 0.5 auto-spectrum factor folded in
+            cc_idx = np.array([c for (c, d) in self.spec_pairs])
+            dd_idx = np.array([d for (c, d) in self.spec_pairs])
+            fac_arr = np.array([0.5 if c == d else 1.0
+                                for (c, d) in self.spec_pairs])
+            nslab_store = np.zeros((ns, nsel))
+
         J = max(1, self.batch_size // Nc)
         t0 = time.time()
         for j0 in range(0, nsel, J):
@@ -468,10 +500,16 @@ class QMLWorkspace:
             A = self.cov.to_modes(V)                      # (Nc, K, jc*Nc)
             H = A.reshape(Nc, K, jc, Nc).transpose(0, 1, 3, 2)  # (a,k,c',j)
             Vr = V.reshape(-1, jc, Nc)
-            W2d_dev = W2d_dev.at[:, :, jnp.asarray(kcols)].add(
-                jnp.einsum("pjc,p,pjd->cdj", Vr, noisevar, Vr))
+            w2d_batch = jnp.einsum("pjc,p,pjd->cdj", Vr, noisevar, Vr)
+            W2d_dev = W2d_dev.at[:, :, jnp.asarray(kcols)].add(w2d_batch)
+            if keep_samples:
+                w2d_h = np.asarray(w2d_batch)             # (Nc, Nc, jc)
+                nslab_store[:, j0:j0 + jc] = (
+                    w2d_h[cc_idx, dd_idx] * fac_arr[:, None])
             # accumulate T: loop over row-l blocks, all on device
             lj = jnp.asarray(lmode[kcols])
+            slab_batch = (jnp.zeros((ns, nbb, ns, jc)) if keep_samples
+                          else None)
             for l1 in range(nl):
                 sl = self.index.band_slice(l1 + self.lmin, l1 + self.lmin)
                 Hl = H[:, sl.start:sl.stop]               # (a, kl, c', j)
@@ -480,6 +518,15 @@ class QMLWorkspace:
                                          lj, num_segments=nl)
                 T_dev = T_dev.at[:, :, :, :, l1, :].add(
                     Xl.transpose(1, 2, 3, 4, 0))
+                if keep_samples:
+                    # per-mode binned response: contract the comp pairs and
+                    # accumulate this row block into its band b1
+                    RlABj = 0.5 * jnp.einsum("ABabcd,abcdj->ABj",
+                                             Pcontract, X)
+                    slab_batch = slab_batch.at[:, int(band_of_l[l1])].add(
+                        RlABj)
+            if keep_samples:
+                slab_store[:, :, :, j0:j0 + jc] = np.asarray(slab_batch)
             if self.verbose and (j0 // J) % 8 == 0:
                 self._log(f"exact response {j0 + jc}/{nsel} columns "
                           f"(cg {self.last_cg[0]} it)")
@@ -488,8 +535,6 @@ class QMLWorkspace:
         W2d = np.asarray(W2d_dev) * scale_l[lmode][None, None, :]
 
         # ---- assemble response / windows / noise bias -----------------------
-        ns = len(self.spec_pairs)
-
         def pairs(c, d):
             return [(c, d)] if c == d else [(c, d), (d, c)]
 
@@ -502,8 +547,6 @@ class QMLWorkspace:
                         acc = acc + T[dd, g, ee, ff]
                 Rl[A, :, B, :] = 0.5 * acc
 
-        band_of_l = np.asarray(self._band_of_l)
-        nbb = self.bins.nbands
         Fb = np.zeros((ns, nbb, ns, nl))
         for b in range(nbb):
             Fb[:, b] = Rl[:, band_of_l == b].sum(axis=1)
@@ -529,10 +572,68 @@ class QMLWorkspace:
         self.hartlap = 1.0
         self.R_inv = np.linalg.inv(self.R_hat)
         self.ybar_fid = None
+        self._subsample_store = None
+        if keep_samples:
+            from .subsample import SubsampleStore
+            strat = lmode[sel]
+            N_l = np.bincount(lmode, minlength=nl)
+            n_l_cnt = np.bincount(strat, minlength=nl)
+            store = SubsampleStore(
+                slab_store, nslab_store, strat, band_of_l, N_l, n_l_cnt,
+                ns, nbb, nl, self.R_hat, self.R_inv, self.n_hat,
+                self.is_user_band)
+            self._subsample_store = store
+            # the noise bias is subsampled too: fill its (otherwise zero)
+            # standard error from the stratified subsampling covariance
+            self.n_hat_err = np.sqrt(np.clip(
+                np.diag(store.noise_cov_analytic()), 0, None))
         self._mc_done = True
         self._log(f"exact response done in {(time.time() - t0) / 60:.1f} min "
                   f"({nsel}/{K} columns, "
                   f"condition {np.linalg.cond(self.R_hat):.2e})")
+
+    def subsample_error(self, ref="fiducial", data=None, n_boot=2000, seed=0,
+                        include_noise_bias=True):
+        """Error budget for the column-subsampling inaccuracy of ``R`` and ``n``.
+
+        Requires a prior ``run_exact(sample_frac=f, keep_samples=True)``.
+        Returns a :class:`~simaster.subsample.SubsampleError` carrying the
+        analytic (delta-method) and bootstrap covariances of the bandpowers
+        induced by the finite column draw -- terms to *add* to ``R^-1`` -- the
+        per-band suboptimality ``sqrt(diag Cov_sub / diag R^-1)``, and the
+        subsampling covariance of the noise bias ``n`` itself.
+
+        The error is evaluated at a reference data statistic ``q = y - n``:
+        ``ref='fiducial'`` (default) uses the deterministic fiducial
+        ``q = R_hat c_fid`` (data-independent budget); pass ``data`` (resolved
+        as in :meth:`estimate`) to use the real data; or pass ``ref`` as a
+        full-band bandpower vector to evaluate at arbitrary ``c``.
+
+        ``include_noise_bias`` (default True): also propagate the (correlated)
+        noise-bias fluctuation into the *bandpower* covariance, i.e. budget
+        ``delta(R c + n)`` rather than ``delta(R c)`` alone.  The noise-bias
+        covariance and its per-band error are reported either way.
+        """
+        from .subsample import compute_subsample_error
+        store = getattr(self, "_subsample_store", None)
+        if store is None:
+            raise RuntimeError("run_exact(sample_frac=f, keep_samples=True) "
+                               "must be run before subsample_error()")
+        if data is not None:
+            if isinstance(data, (list, tuple)):
+                data = self.pack_data(data)
+            yd, _ = self._y_stats(self._filter(data))
+            q = np.asarray(yd)[:, 0] - self.n_hat
+            c_full = self.R_inv @ q
+        elif isinstance(ref, str) and ref == "fiducial":
+            c_full = self.fiducial_bandpowers().reshape(-1)
+            q = self.R_hat @ c_full
+        else:
+            c_full = np.asarray(ref, float).reshape(-1)
+            q = self.R_hat @ c_full
+        return compute_subsample_error(store, q, c_full, n_boot=n_boot,
+                                       seed=seed,
+                                       include_noise_bias=include_noise_bias)
 
     # ------------------------------------------------------------- MC engine --
     def run_mc(self, n_sims_fisher=None, n_sims_noise=None):

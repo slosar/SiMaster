@@ -25,6 +25,39 @@ dominate the error budget: offset $\le \epsilon\,\sigma_A$ per band with
 $\epsilon=0.1$ (error-bar inflation $<0.5\%$); all counts below scale as
 $1/\epsilon^2$.
 
+\paragraph{Measured per-draw error budget.} The heuristic above estimates the
+\emph{typical} subsampling offset; for a given run \simaster\ also
+\emph{measures} it. With \texttt{run\_exact(sample\_frac}$=f$,
+\texttt{keep\_samples=True)} the per-mode contributions to the binned $R$ and
+noise bias $n$ are retained --- each solved column feeds exactly one column
+band of the pre-symmetrized $R$ (a compact slab) and one band of $n$, since
+the row index of $H$ is summed exactly --- and \texttt{subsample\_error()}
+turns them into a covariance to \emph{add} to $R^{-1}$.  Both $R$ and $n$ are
+linear in the per-mode contributions, so their subsampling covariance is the
+exact stratified without-replacement estimator
+\begin{equation}
+  \mathrm{Cov}(\hat R\,c) \;=\; \sum_{\ell'} N_{\ell'}^2
+  \Big(1-\frac{n_{\ell'}}{N_{\ell'}}\Big)\frac{S_{\ell'}}{n_{\ell'}},
+  \label{eq:strat}
+\end{equation}
+with $S_{\ell'}$ the per-stratum sample covariance of the per-mode vectors and
+the finite-population correction $(1-n_{\ell'}/N_{\ell'})$ --- the exact
+per-$\ell'$ form of the $(1-f)$ factor --- making it vanish identically at
+$f=1$.  Propagated by the delta method, $\delta c = -R^{-1}[\delta(Rc)+\delta
+n]$: the $R$ and $n$ errors are \emph{correlated}, sharing the column draw, so
+the honest bandpower budget combines them.  Because the matrix inverse is
+nonlinear, a column \emph{bootstrap} is also provided --- resample the columns
+within each stratum (FPC-scaled), rebuild $R^*$ and $n^*$ with the same
+weights, and form $c^*=R^{*-1}(y-n^*)$ --- capturing the inverse's bias/skew
+that the delta method misses, and yielding the otherwise-zero noise-bias error
+$\sigma(n_A)$.  The diagnostic $\sqrt{\mathrm{diag}\,\mathrm{Cov}_{\rm
+sub}/\mathrm{diag}\,R^{-1}}$ reports the per-band error-bar inflation directly
+(a measured replacement for the $\epsilon$ requirement).  Single-mode strata
+(the $\ge1$-column floor) contribute zero in both estimators, consistently ---
+their within-stratum variance is undeterminable.  The per-mode store is
+additive and concatenable, so a distributed run checkpoints it per node and
+aggregates before this (cheap) post-processing.
+
 \paragraph{Planck-like configuration.} $N_{\rm side}=1024$,
 $\ell_{\max}=2000$, $T/E/B$, $f_{\rm sky}\simeq0.6$,
 TT signal-dominated to $\ell\sim1500$, hence

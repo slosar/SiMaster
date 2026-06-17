@@ -45,10 +45,22 @@ Methods:
   With `deviations=True` the smooth fiducial is kept in the covariance and
   only flat band *deviations* are fitted (see method.md); `result.deviation`
   flags this and `result.cl` then holds deviations.
-- `run_exact(sample_frac=None, sample_seed=0)` / `run_mc(n_sims_fisher=None,
-  n_sims_noise=None)` — force the response computation (an engine is run
-  automatically on first `estimate`). `sample_frac=f` gives the subsampled
-  engine directly.
+- `run_exact(sample_frac=None, sample_seed=0, keep_samples=False)` /
+  `run_mc(n_sims_fisher=None, n_sims_noise=None)` — force the response
+  computation (an engine is run automatically on first `estimate`).
+  `sample_frac=f` gives the subsampled engine directly. `keep_samples=True`
+  retains the per-mode contributions (in `_subsample_store`) for the
+  subsampling error budget and fills the otherwise-zero `n_hat_err`.
+- `subsample_error(ref="fiducial", data=None, n_boot=2000, seed=0,
+  include_noise_bias=True)` → `SubsampleError` — error budget for the
+  column-subsampling inaccuracy of the Fisher matrix `R` and noise bias `n`,
+  from a prior `run_exact(sample_frac=f, keep_samples=True)`. Returns the
+  analytic (stratified, delta-method) and column-`bootstrap` covariances of
+  the bandpowers (to add to `R⁻¹`), the per-band suboptimality
+  `√(diag Cov_sub / diag R⁻¹)`, and the noise-bias covariance / error.
+  Evaluated at the fiducial (default), supplied `data`, or an arbitrary `ref`
+  bandpower vector. The `SubsampleStore` is checkpointable
+  (`save`/`load`/`merge`) for multi-node aggregation.
 - `build_deflation(k=None, steps=None, n_probes=None, seed=0)` — (re)build
   the deflated/recycled-CG subspace from the current `C` (harvested by
   recycling a short instrumented solve); called automatically before the

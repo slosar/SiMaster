@@ -13,3 +13,5 @@ report/*.toc
 report/*.pdf
 .pytest_cache/
 .ipynb_checkpoints/
+report/*.fdb_latexmk
+report/*.fls

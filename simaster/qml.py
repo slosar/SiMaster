@@ -184,6 +184,13 @@ class QMLWorkspace:
         all bands -- size n_sims accordingly.  'auto' picks 'exact' when
         the mode count makes it cheaper than the requested n_sims_fisher.
     n_sims_fisher / n_sims_noise : Monte-Carlo sample sizes for 'mc' mode.
+    fisher_control_variate : None or 'pseudo_cl'.
+        Optional variance-reduction control for the exact/subsampled Fisher
+        engine.  'pseudo_cl' builds a deterministic pseudo-Cl / MASTER-style
+        response with a local diagonal inverse-covariance weight, then
+        estimates only the residual ``exact - pseudo_cl`` from sampled columns:
+        ``R = R0 + sample(exact - R0)``.  The estimator remains unbiased; the
+        subsampling error budget is applied to the residual slabs.
     template_alpha : None (default) -> exact deprojection (alpha -> inf,
         Woodbury); finite value -> add alpha_rel*tr(C)/||t||^2 * t t^T to C.
     deproject_low_ell : marginalize monopole+dipole of every spin-0 field.
@@ -206,6 +213,7 @@ class QMLWorkspace:
 
     def __init__(self, fields, bins: Bins, cl_fid, lmax=None, lmin=2,
                  backend="auto", fisher_mode="auto", fisher_frac=0.25,
+                 fisher_control_variate=None,
                  n_sims_fisher=2048, n_sims_noise=512, cg_tol=1e-5,
                  cg_maxiter=700, seed=1234, template_alpha=None,
                  deproject_low_ell=True, batch_size=256, cachedir=None,
@@ -232,6 +240,8 @@ class QMLWorkspace:
         self.deflation_probes = int(deflation_probes)
         self._defl = None
         self.n_sims_fisher, self.n_sims_noise = n_sims_fisher, n_sims_noise
+        self.fisher_control_variate = self._normalise_control_variate(
+            fisher_control_variate)
         self._key = jax.random.PRNGKey(seed)
 
         # components and spectra
@@ -299,6 +309,19 @@ class QMLWorkspace:
         if self.verbose:
             print(f"[simaster] {msg}", flush=True)
 
+    @staticmethod
+    def _normalise_control_variate(control):
+        if control is None or control is False:
+            return None
+        if control is True:
+            return "pseudo_cl"
+        c = str(control).lower()
+        if c in ("none", "off", "false"):
+            return None
+        if c in ("pseudo_cl", "pcl", "master"):
+            return "pseudo_cl"
+        raise ValueError("fisher_control_variate must be None or 'pseudo_cl'")
+
     def _add_templates(self, extra):
         """Append automatically generated templates to the CovModel."""
         if not extra:
@@ -364,6 +387,83 @@ class QMLWorkspace:
         """Build the deflation space on first use if requested and absent."""
         if self.deflation > 0 and self._defl is None:
             self.build_deflation()
+
+    # --------------------------------------------------- Fisher control var --
+    def _diag_cinv_weights(self):
+        """Diagonal signal+noise inverse used by the pseudo-Cl control.
+
+        The exact filter is still used in the sampled residual.  This only
+        defines a cheap deterministic local-diagonal approximation to it,
+        with the same pixel-row layout as ``CovModel``.  For spin-2 fields
+        the diagonal uses the isotropic zero-lag Q/U signal variance implied
+        by the E/B trace; the approximation is the local diagonal filter, not
+        an additional spin-2 approximation.
+        """
+        weights = []
+        ell = np.arange(self.cov.index.lmax + 1)
+        ellfac = (2 * ell + 1) / (4.0 * np.pi)
+        for f, comps in zip(self.fields, self.cov.comp_of_field):
+            bl2 = np.ones_like(ell, dtype=float)
+            if f.beam is not None:
+                bl2 = f.beam[: self.cov.index.lmax + 1] ** 2
+            if f.spin == 0:
+                sig = [np.sum(ellfac * self.cov.clmat[c, c] * bl2)
+                       for c in comps]
+            else:
+                # Q and U have equal isotropic variance on average.
+                tr = sum(self.cov.clmat[c, c] for c in comps)
+                sig_qu = 0.5 * np.sum(ellfac * tr * bl2)
+                sig = [sig_qu] * f.ncomp
+            for s in sig:
+                var = 1.0 / f.ivar + (f.mask ** 2) * float(s)
+                weights.append(1.0 / np.clip(var, 1e-300, None))
+        return jnp.asarray(np.concatenate(weights), dtype=self.cov.dtype)
+
+    def _pseudo_cl_control(self, lmode):
+        """Full pseudo-Cl / MASTER-style Fisher control.
+
+        Builds the deterministic response obtained by replacing the exact
+        inverse-covariance filter with the diagonal weights from
+        :meth:`_diag_cinv_weights`.  This is a weighted-SHT accumulation of the
+        same coupling object that MASTER computes, kept in SiMaster's discrete
+        normalization so it decomposes exactly into sampled column residuals.
+        """
+        Nc, K = len(self.comp_names), self.index.nmodes
+        nl = self.ls.size
+        T0 = jnp.zeros((Nc, Nc, Nc, Nc, nl, nl))
+        W20 = jnp.zeros((Nc, Nc, K))
+        m0 = self._diag_cinv_weights()
+        noisevar = self.cov.noisevar
+        J = max(1, self.batch_size // Nc)
+        t0 = time.time()
+        for j0 in range(0, K, J):
+            kcols = np.arange(j0, min(j0 + J, K))
+            jc = kcols.size
+            E = jnp.zeros((Nc, K, jc * Nc))
+            kk = jnp.repeat(jnp.asarray(kcols), Nc)
+            cc = jnp.tile(jnp.arange(Nc), jc)
+            E = E.at[cc, kk, jnp.arange(jc * Nc)].set(1.0)
+            Gc = self.cov.from_modes(E)
+            V0 = m0[:, None] * Gc
+            A0 = self.cov.to_modes(V0)
+            H0 = A0.reshape(Nc, K, jc, Nc).transpose(0, 1, 3, 2)
+            Vr0 = V0.reshape(-1, jc, Nc)
+            w20_batch = jnp.einsum("pjc,p,pjd->cdj", Vr0, noisevar, Vr0)
+            W20 = W20.at[:, :, jnp.asarray(kcols)].add(w20_batch)
+            lj = jnp.asarray(lmode[kcols])
+            for l1 in range(nl):
+                sl = self.index.band_slice(l1 + self.lmin, l1 + self.lmin)
+                Hl0 = H0[:, sl.start:sl.stop]
+                X0 = jnp.einsum("akcj,bkdj->abcdj", Hl0, Hl0)
+                Xl0 = jax.ops.segment_sum(X0.transpose(4, 0, 1, 2, 3),
+                                          lj, num_segments=nl)
+                T0 = T0.at[:, :, :, :, l1, :].add(
+                    Xl0.transpose(1, 2, 3, 4, 0))
+            if self.verbose and (j0 // J) % 32 == 0:
+                self._log(f"pseudo-Cl Fisher control {j0 + jc}/{K} columns")
+        self._log(f"pseudo-Cl Fisher control built in "
+                  f"{(time.time() - t0) / 60:.1f} min")
+        return np.asarray(T0), np.asarray(W20)
 
     def _prepare_deprojection(self):
         if self.cov.Tmat is None or self._template_mode == "alpha":
@@ -433,6 +533,12 @@ class QMLWorkspace:
         :meth:`subsample_error` builds an analytic + bootstrap error budget
         for the subsampling inaccuracy.  Costs O(ns^2 nbb nsel) extra memory
         and a little assembly; off by default.
+
+        If ``fisher_control_variate='pseudo_cl'`` was set on the workspace,
+        the accumulated response is ``R0 + sample(R_exact - R0)`` where
+        ``R0`` is a deterministic pseudo-Cl / MASTER-style response built
+        with local diagonal inverse-covariance pixel weights.  The same residual
+        construction is used for the noise bias and for ``keep_samples``.
         """
         self._prepare_deprojection()
         self._ensure_deflation()
@@ -454,11 +560,19 @@ class QMLWorkspace:
                 scale_l[li] = kl.size / n
             sel = np.sort(np.concatenate(sel))
         nsel = sel.size
-        # T and W2d accumulate on device; transferred to host once at the end
-        # (per-l host syncs dominated the runtime otherwise)
+        control = self.fisher_control_variate
+        if control == "pseudo_cl":
+            T_base, W2d_base = self._pseudo_cl_control(lmode)
+        else:
+            T_base = np.zeros((Nc, Nc, Nc, Nc, nl, nl))
+            W2d_base = np.zeros((Nc, Nc, K))
+        # T_dev and W2d_dev hold either raw exact contributions (no control) or
+        # residual contributions (exact - pseudo-Cl control). They accumulate on
+        # device and transfer to host once at the end.
         T_dev = jnp.zeros((Nc, Nc, Nc, Nc, nl, nl))
         W2d_dev = jnp.zeros((Nc, Nc, K))
         noisevar = self.cov.noisevar
+        m0 = self._diag_cinv_weights() if control == "pseudo_cl" else None
 
         # per-mode contributions to the binned response, for the subsampling
         # error budget (see simaster.subsample); guarded so the default path
@@ -501,9 +615,19 @@ class QMLWorkspace:
             H = A.reshape(Nc, K, jc, Nc).transpose(0, 1, 3, 2)  # (a,k,c',j)
             Vr = V.reshape(-1, jc, Nc)
             w2d_batch = jnp.einsum("pjc,p,pjd->cdj", Vr, noisevar, Vr)
-            W2d_dev = W2d_dev.at[:, :, jnp.asarray(kcols)].add(w2d_batch)
+            if control == "pseudo_cl":
+                V0 = m0[:, None] * Gc
+                A0 = self.cov.to_modes(V0)
+                H0 = A0.reshape(Nc, K, jc, Nc).transpose(0, 1, 3, 2)
+                Vr0 = V0.reshape(-1, jc, Nc)
+                w2d0_batch = jnp.einsum("pjc,p,pjd->cdj", Vr0, noisevar, Vr0)
+                w2d_add = w2d_batch - w2d0_batch
+            else:
+                H0 = None
+                w2d_add = w2d_batch
+            W2d_dev = W2d_dev.at[:, :, jnp.asarray(kcols)].add(w2d_add)
             if keep_samples:
-                w2d_h = np.asarray(w2d_batch)             # (Nc, Nc, jc)
+                w2d_h = np.asarray(w2d_add)               # (Nc, Nc, jc)
                 nslab_store[:, j0:j0 + jc] = (
                     w2d_h[cc_idx, dd_idx] * fac_arr[:, None])
             # accumulate T: loop over row-l blocks, all on device
@@ -514,6 +638,10 @@ class QMLWorkspace:
                 sl = self.index.band_slice(l1 + self.lmin, l1 + self.lmin)
                 Hl = H[:, sl.start:sl.stop]               # (a, kl, c', j)
                 X = jnp.einsum("akcj,bkdj->abcdj", Hl, Hl)
+                if control == "pseudo_cl":
+                    Hl0 = H0[:, sl.start:sl.stop]
+                    X0 = jnp.einsum("akcj,bkdj->abcdj", Hl0, Hl0)
+                    X = X - X0
                 Xl = jax.ops.segment_sum(X.transpose(4, 0, 1, 2, 3),
                                          lj, num_segments=nl)
                 T_dev = T_dev.at[:, :, :, :, l1, :].add(
@@ -531,42 +659,47 @@ class QMLWorkspace:
                 self._log(f"exact response {j0 + jc}/{nsel} columns "
                           f"(cg {self.last_cg[0]} it)")
         # stratified-subsample renormalization (no-op when all columns run)
-        T = np.asarray(T_dev) * scale_l[None, None, None, None, None, :]
-        W2d = np.asarray(W2d_dev) * scale_l[lmode][None, None, :]
+        T_res = np.asarray(T_dev) * scale_l[None, None, None, None, None, :]
+        W2d_res = np.asarray(W2d_dev) * scale_l[lmode][None, None, :]
+        T = T_base + T_res
+        W2d = W2d_base + W2d_res
 
         # ---- assemble response / windows / noise bias -----------------------
         def pairs(c, d):
             return [(c, d)] if c == d else [(c, d), (d, c)]
 
-        Rl = np.zeros((ns, nl, ns, nl))
-        for A, (c, d) in enumerate(self.spec_pairs):
-            for B, (e, f) in enumerate(self.spec_pairs):
-                acc = 0.0
-                for (g, dd) in pairs(c, d):
-                    for (ee, ff) in pairs(e, f):
-                        acc = acc + T[dd, g, ee, ff]
-                Rl[A, :, B, :] = 0.5 * acc
+        def assemble(T_in, W2d_in):
+            Rl = np.zeros((ns, nl, ns, nl))
+            for A, (c, d) in enumerate(self.spec_pairs):
+                for B, (e, f) in enumerate(self.spec_pairs):
+                    acc = 0.0
+                    for (g, dd) in pairs(c, d):
+                        for (ee, ff) in pairs(e, f):
+                            acc = acc + T_in[dd, g, ee, ff]
+                    Rl[A, :, B, :] = 0.5 * acc
 
-        Fb = np.zeros((ns, nbb, ns, nl))
-        for b in range(nbb):
-            Fb[:, b] = Rl[:, band_of_l == b].sum(axis=1)
-        self.F_l_hat = Fb.reshape(ns * nbb, ns * nl)
-        Rb = np.zeros((ns, nbb, ns, nbb))
-        for b in range(nbb):
-            Rb[:, :, :, b] = Fb[:, :, :, band_of_l == b].sum(axis=3)
-        R = Rb.reshape(ns * nbb, ns * nbb)
+            Fb = np.zeros((ns, nbb, ns, nl))
+            for b in range(nbb):
+                Fb[:, b] = Rl[:, band_of_l == b].sum(axis=1)
+            Rb = np.zeros((ns, nbb, ns, nbb))
+            for b in range(nbb):
+                Rb[:, :, :, b] = Fb[:, :, :, band_of_l == b].sum(axis=3)
+            n_l = np.zeros((ns, nl))
+            for A, (c, d) in enumerate(self.spec_pairs):
+                fac = 0.5 if c == d else 1.0
+                n_l[A] = fac * np.bincount(lmode, weights=W2d_in[c, d],
+                                           minlength=nl)
+            nb_arr = np.zeros((ns, nbb))
+            for b in range(nbb):
+                nb_arr[:, b] = n_l[:, band_of_l == b].sum(axis=1)
+            return (Rb.reshape(ns * nbb, ns * nbb),
+                    Fb.reshape(ns * nbb, ns * nl),
+                    nb_arr.reshape(-1))
+
+        R, self.F_l_hat, self.n_hat = assemble(T, W2d)
         # column subsampling breaks exact symmetry; symmetrizing averages
         # two semi-independent estimates (harmless no-op for the full run)
         self.R_hat = 0.5 * (R + R.T)
-
-        n_l = np.zeros((ns, nl))
-        for A, (c, d) in enumerate(self.spec_pairs):
-            fac = 0.5 if c == d else 1.0
-            n_l[A] = fac * np.bincount(lmode, weights=W2d[c, d], minlength=nl)
-        nb_arr = np.zeros((ns, nbb))
-        for b in range(nbb):
-            nb_arr[:, b] = n_l[:, band_of_l == b].sum(axis=1)
-        self.n_hat = nb_arr.reshape(-1)
         self.n_hat_err = np.zeros_like(self.n_hat)
 
         self.hartlap = 1.0
@@ -578,10 +711,14 @@ class QMLWorkspace:
             strat = lmode[sel]
             N_l = np.bincount(lmode, minlength=nl)
             n_l_cnt = np.bincount(strat, minlength=nl)
+            R_det = n_det = None
+            if control == "pseudo_cl":
+                R_det, _, n_det = assemble(T_base, W2d_base)
+                R_det = 0.5 * (R_det + R_det.T)
             store = SubsampleStore(
                 slab_store, nslab_store, strat, band_of_l, N_l, n_l_cnt,
                 ns, nbb, nl, self.R_hat, self.R_inv, self.n_hat,
-                self.is_user_band)
+                self.is_user_band, R_det=R_det, n_det=n_det)
             self._subsample_store = store
             # the noise bias is subsampled too: fill its (otherwise zero)
             # standard error from the stratified subsampling covariance

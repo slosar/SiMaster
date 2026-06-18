@@ -80,12 +80,16 @@ class SubsampleStore:
         The symmetrised response and its inverse (``nb = ns*nbb``).
     n_hat : (nb,) array
         The binned noise bias.
+    R_det, n_det : arrays, optional
+        Deterministic control-variate offsets.  The stochastic slabs then
+        store residuals around these offsets; by default both are zero and
+        the historical raw-subsampling behavior is recovered.
     is_user_band : (nbb,) bool array
         Which bands are reported (user) vs marginalised (junk).
     """
 
     def __init__(self, slab, nslab, strat, band_of_l, N_l, n_l, ns, nbb, nl,
-                 R_hat, R_inv, n_hat, is_user_band):
+                 R_hat, R_inv, n_hat, is_user_band, R_det=None, n_det=None):
         self.slab = np.ascontiguousarray(slab, dtype=np.float64)
         self.nslab = np.ascontiguousarray(nslab, dtype=np.float64)
         self.strat = np.asarray(strat, dtype=np.int64)
@@ -97,6 +101,10 @@ class SubsampleStore:
         self.R_inv = None if R_inv is None else np.asarray(R_inv, float)
         self.n_hat = None if n_hat is None else np.asarray(n_hat, float)
         self.is_user_band = np.asarray(is_user_band, dtype=bool)
+        self.R_det = (np.zeros((self.ns * self.nbb, self.ns * self.nbb))
+                      if R_det is None else np.asarray(R_det, float))
+        self.n_det = (np.zeros(self.ns * self.nbb)
+                      if n_det is None else np.asarray(n_det, float))
 
     # -- derived quantities ------------------------------------------------
     @property
@@ -140,7 +148,7 @@ class SubsampleStore:
         """
         C = self.slab * np.asarray(weights)[None, None, None, :]
         Rpre = np.einsum("ijkp,pd->ijkd", C, self._onehot_band())
-        R = Rpre.reshape(self.nb, self.nb)
+        R = self.R_det + Rpre.reshape(self.nb, self.nb)
         return 0.5 * (R + R.T)
 
     def build_n(self, weights):
@@ -149,7 +157,7 @@ class SubsampleStore:
         ``weights = w0`` reproduces ``n_hat``.
         """
         contrib = self.nslab * np.asarray(weights)[None, :]
-        return (contrib @ self._onehot_band()).reshape(self.nb)
+        return self.n_det + (contrib @ self._onehot_band()).reshape(self.nb)
 
     def reconstruct_R(self):
         """Rebuild ``R_hat`` from the stored slabs (consistency check)."""
@@ -175,12 +183,16 @@ class SubsampleStore:
             raise ValueError("stores have incompatible shapes")
         if not np.array_equal(self.N_l, other.N_l):
             raise ValueError("stores have different mode populations N_l")
+        if (not np.allclose(self.R_det, other.R_det)
+                or not np.allclose(self.n_det, other.n_det)):
+            raise ValueError("stores have different deterministic controls")
         m = SubsampleStore(
             np.concatenate([self.slab, other.slab], axis=3),
             np.concatenate([self.nslab, other.nslab], axis=1),
             np.concatenate([self.strat, other.strat]),
             self.band_of_l, self.N_l, self.n_l + other.n_l,
-            self.ns, self.nbb, self.nl, None, None, None, self.is_user_band)
+            self.ns, self.nbb, self.nl, None, None, None, self.is_user_band,
+            R_det=self.R_det, n_det=self.n_det)
         m.R_hat = m.reconstruct_R()
         m.R_inv = np.linalg.inv(m.R_hat)
         m.n_hat = m.reconstruct_n()
@@ -194,7 +206,8 @@ class SubsampleStore:
                  R_hat=np.array([]) if self.R_hat is None else self.R_hat,
                  R_inv=np.array([]) if self.R_inv is None else self.R_inv,
                  n_hat=np.array([]) if self.n_hat is None else self.n_hat,
-                 is_user_band=self.is_user_band)
+                 is_user_band=self.is_user_band,
+                 R_det=self.R_det, n_det=self.n_det)
 
     @classmethod
     def load(cls, path):
@@ -202,10 +215,13 @@ class SubsampleStore:
         d = np.load(path)
         ns, nbb, nl = (int(x) for x in d["shape"])
         rh, ri, nh = d["R_hat"], d["R_inv"], d["n_hat"]
+        R_det = d["R_det"] if "R_det" in d else None
+        n_det = d["n_det"] if "n_det" in d else None
         return cls(d["slab"], d["nslab"], d["strat"], d["band_of_l"],
                    d["N_l"], d["n_l"], ns, nbb, nl,
                    rh if rh.size else None, ri if ri.size else None,
-                   nh if nh.size else None, d["is_user_band"])
+                   nh if nh.size else None, d["is_user_band"],
+                   R_det=R_det, n_det=n_det)
 
 
 class SubsampleError:

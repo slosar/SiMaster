@@ -181,6 +181,48 @@ def test_run_exact_matches_dense_reference():
     assert np.abs(w.n_hat - ex.noise_bias()).max() < 1e-8 * np.abs(ex.noise_bias()).max()
 
 
+def test_pseudo_cl_control_variate_full_run_matches_exact():
+    """The control variate is algebraically neutral at f=1:
+    R0 + all_columns(exact - R0) == exact."""
+    f, b, cl, mask, ivar = setup_T()
+    cl_flat = b.unbin_cl(b.bin_cl(cl), LMAX); cl_flat[:2] = 0
+    base = sm.QMLWorkspace(f, b, {('t_0', 't_0'): cl_flat}, lmax=LMAX,
+                           fisher_mode="exact", verbose=False,
+                           deproject_low_ell=False, cg_tol=1e-9)
+    base.run_exact(keep_samples=True)
+    cv = sm.QMLWorkspace(f, b, {('t_0', 't_0'): cl_flat}, lmax=LMAX,
+                         fisher_mode="exact", verbose=False,
+                         deproject_low_ell=False, cg_tol=1e-9,
+                         fisher_control_variate="pseudo_cl")
+    cv.run_exact(keep_samples=True)
+    scale = np.sqrt(np.outer(np.diag(base.R_hat), np.diag(base.R_hat)))
+    assert (np.abs(cv.R_hat - base.R_hat) / scale).max() < 1e-8
+    assert np.allclose(cv.F_l_hat, base.F_l_hat,
+                       rtol=1e-8, atol=1e-9 * np.abs(base.F_l_hat).max())
+    assert np.allclose(cv.n_hat, base.n_hat,
+                       rtol=1e-8, atol=1e-9 * np.abs(base.n_hat).max())
+    assert np.allclose(cv._subsample_store.reconstruct_R(), cv.R_hat,
+                       rtol=1e-10, atol=1e-10 * np.abs(cv.R_hat).max())
+    assert np.allclose(cv._subsample_store.reconstruct_n(), cv.n_hat,
+                       rtol=1e-10, atol=1e-10 * np.abs(cv.n_hat).max())
+
+
+def test_pseudo_cl_control_variate_subsample_error_runs():
+    """Residual slabs from the control variate feed the existing error budget."""
+    f, b, cl, mask, ivar = setup_T()
+    cl_flat = b.unbin_cl(b.bin_cl(cl), LMAX); cl_flat[:2] = 0
+    cv = sm.QMLWorkspace(f, b, {('t_0', 't_0'): cl_flat}, lmax=LMAX,
+                         fisher_mode="subsampled", fisher_frac=0.4,
+                         verbose=False, deproject_low_ell=False,
+                         fisher_control_variate="pseudo_cl")
+    cv.run_exact(sample_frac=0.4, sample_seed=3, keep_samples=True)
+    assert np.allclose(cv._subsample_store.reconstruct_R(), cv.R_hat,
+                       rtol=1e-10, atol=1e-10 * np.abs(cv.R_hat).max())
+    err = cv.subsample_error(n_boot=16, seed=4)
+    assert np.all(np.isfinite(err.cov_analytic))
+    assert np.all(np.isfinite(err.cov_boot))
+
+
 @pytest.mark.slow
 def test_subsampled_response_unbiased():
     """Column-subsampled response (stratified, 1/f-renormalized) is an

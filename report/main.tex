@@ -192,6 +192,34 @@ exact noise bias, for any binning.  Cost equals $N_{\rm modes}$ CG
 right-hand sides, i.e.\ comparable to a few-thousand-simulation MC run, but
 deterministic.
 
+\paragraph{Pseudo-\texorpdfstring{$C_\ell$}{Cl} control variate (experimental).}
+For the exact and column-subsampled engines, \simaster\ can replace the
+sampled response by
+\begin{equation}
+  \hat R_{\rm cv} \;=\; R_0
+    + \widehat{(R_{\rm exact}-R_0)},\qquad
+  \hat n_{\rm cv} \;=\; n_0
+    + \widehat{(n_{\rm exact}-n_0)} ,
+  \label{eq:pclcv}
+\end{equation}
+enabled with \texttt{fisher\_control\_variate='pseudo\_cl'}.  Here $R_0$
+is a deterministic MASTER-style pseudo-$C_\ell$ coupling in local diagonal
+signal-plus-noise $C^{-1}$ pixel weights, with the same construction for
+$n_0$.  For spin-2 fields this diagonal uses the isotropic zero-lag Q/U
+signal variance implied by the E/B trace; the approximation is the local
+diagonal filter itself.  The implementation evaluates this control in the
+same discrete HEALPix/SHT normalization as the QML operator, so if all columns
+are used the residual sum cancels exactly and Eq.~(\ref{eq:pclcv}) reproduces
+the ordinary exact engine.  With a subsample, the stored per-column slabs are
+the residuals, so the existing stratified finite-population covariance and
+column bootstrap apply unchanged, now estimating the uncertainty of
+$R_{\rm exact}-R_0$ rather than of $R_{\rm exact}$ itself.  The method is
+therefore unbiased for any control and has a direct per-run diagnostic:
+compare \texttt{subsample\_error()} with and without the control.  A useful
+control reduces the residual slab variance; a poorly matched local diagonal
+approximation can increase it, so this option is left off by default pending
+production comparisons.
+
 \paragraph{Monte Carlo (any $N_{\rm side}$).}  For sims
 $x\sim\mathcal N(0,\C)$, $\mathrm{cov}[\hat y_A,\hat y_B] = R_{AB}$
 exactly (also for the deprojected filter, since $M\C M = M$); the same sims

@@ -26,6 +26,7 @@ Precomputes everything tied to (fields, fiducial, bins). Important options:
 | `backend` | auto | `'dense'` (GPU GEMM, nside≲64), `'ducc'` (matrix-free CPU), or `'s2fft'` (native-JAX on-device; opt-in, needs fixed s2fft — see method.md) |
 | `fisher_mode` | auto | `'exact'`, `'subsampled'`, or `'mc'` (see method.md) |
 | `fisher_frac` | 0.25 | fraction of mode columns solved in `'subsampled'` mode |
+| `fisher_control_variate` | None | experimental: `'pseudo_cl'` uses a deterministic pseudo-Cl/MASTER-style local-diagonal `Cinv` response as a control variate for the exact/subsampled Fisher engine |
 | `n_sims_fisher`, `n_sims_noise` | 2048/512 | `'mc'`-mode sample sizes |
 | `template_alpha` | None | None = exact Woodbury deprojection; finite = add `alpha*tr(C)/||t||^2 t t^T` |
 | `deproject_low_ell` | True | marginalize monopole+dipole of spin-0 fields |
@@ -50,7 +51,10 @@ Methods:
   computation (an engine is run automatically on first `estimate`).
   `sample_frac=f` gives the subsampled engine directly. `keep_samples=True`
   retains the per-mode contributions (in `_subsample_store`) for the
-  subsampling error budget and fills the otherwise-zero `n_hat_err`.
+  subsampling error budget and fills the otherwise-zero `n_hat_err`. With
+  `fisher_control_variate='pseudo_cl'`, the stored per-mode contributions are
+  residuals around the deterministic pseudo-Cl control, and the same
+  `subsample_error()` machinery applies.
 - `subsample_error(ref="fiducial", data=None, n_boot=2000, seed=0,
   include_noise_bias=True)` → `SubsampleError` — error budget for the
   column-subsampling inaccuracy of the Fisher matrix `R` and noise bias `n`,

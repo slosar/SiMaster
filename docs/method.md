@@ -189,6 +189,20 @@ Two engines:
   cheaper at equal accuracy. The sampled R is symmetrized; check
   conditioning for very small f. This is the recommended scalable mode,
   combined with iteration when bands are strongly signal-dominated.
+- **pseudo-Cl control variate** (`fisher_control_variate='pseudo_cl'` with
+  the exact/subsampled engine): replace the sampled object by
+  `R0 + sample(R_exact - R0)`, where `R0` is a deterministic MASTER-style
+  coupling built with local diagonal signal+noise inverse pixel weights.  For
+  spin-2 fields this diagonal uses the isotropic zero-lag Q/U signal variance
+  implied by the E/B trace; the approximation is the local diagonal filter
+  itself.  The control is computed in SiMaster's discrete HEALPix
+  normalization using the same SHT operators, so a full-column run is
+  algebraically identical to the ordinary exact engine; with
+  `keep_samples=True`, the retained slabs are residuals and
+  `subsample_error()` measures the residual sampling error.  This is
+  experimental: a poor local-diagonal control can increase variance, so
+  production runs should compare the reported suboptimality with and without
+  the option.
 - **mc** (`fisher_mode='mc'`): for sims `x ~ N(0, C̃)`,
   `cov[y_A, y_B] = R_AB` exactly (this also holds for the deprojected
   filter because `M C̃ M = M`), the same sims give windows

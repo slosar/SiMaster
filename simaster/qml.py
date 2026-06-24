@@ -22,6 +22,7 @@ re-centers the fiducial on the estimate.
 
 from __future__ import annotations
 
+import os
 import time
 
 import numpy as np
@@ -33,7 +34,7 @@ from .field import Field
 from .bins import Bins
 from .covariance import CovModel
 from .cg import pcg, solve_C
-from .deflation import build_deflation
+from .deflation import build_deflation, DeflationSpace
 
 
 class BandpowerResult:
@@ -230,6 +231,12 @@ class QMLWorkspace:
         self.deflation = int(deflation)
         self.deflation_steps = deflation_steps
         self.deflation_probes = int(deflation_probes)
+        # Optional path to a precomputed deflation basis (np savez of W +
+        # precond_scale).  When set, build_deflation loads it instead of
+        # re-running the Lanczos harvest -- the harvest is identical for every
+        # Fisher column-chunk that shares this covariance, so computing it once
+        # and reloading saves a full harvest per chunk.  See build_deflation.
+        self.deflation_cache = None
         self._defl = None
         self.n_sims_fisher, self.n_sims_noise = n_sims_fisher, n_sims_noise
         self._key = jax.random.PRNGKey(seed)
@@ -327,7 +334,8 @@ class QMLWorkspace:
                                   deflation=self._defl)
         return X
 
-    def build_deflation(self, k=None, steps=None, n_probes=None, seed=0):
+    def build_deflation(self, k=None, steps=None, n_probes=None, seed=0,
+                        cache=None):
         """Harvest the deflated/recycled-CG subspace from the current C.
 
         Recycles the Krylov information of a short instrumented solve to
@@ -336,11 +344,49 @@ class QMLWorkspace:
         Called automatically before the response loop when ``deflation > 0``;
         also exposed so a deflation space can be (re)built explicitly, e.g.
         after :meth:`update_fiducial`.  Returns the size ``k`` of the built
-        deflation space (0 if disabled)."""
+        deflation space (0 if disabled).
+
+        ``cache`` (falling back to ``self.deflation_cache``) is a path to an
+        npz holding the harvested basis ``W`` and the escalated preconditioner
+        scale.  If it exists it is loaded -- skipping the Lanczos harvest, which
+        is identical for every Fisher column-chunk sharing this C -- and only
+        the cheap coarse operator ``C W`` is re-formed in-process; if it does
+        not exist the basis is harvested as usual and then written there."""
         k = self.deflation if k is None else int(k)
         if k <= 0:
             self._defl = None
             return 0
+        cache = cache or self.deflation_cache
+        # On the s2fft backend the operator's GPU working set scales with the
+        # column-batch width, so forming C W for all k deflation vectors at
+        # once can need tens of GB at nside>=128; cap the batch (same result,
+        # bounded memory).  Dense/ducc have no such blow-up -> no cap.
+        aw_batch = self.batch_size if self.backend == "s2fft" else None
+
+        if cache and os.path.exists(cache):
+            t0 = time.time()
+            d = np.load(cache)
+            if int(d["k"]) != k:
+                raise ValueError(f"deflation cache {cache} has k={int(d['k'])}, "
+                                 f"workspace wants k={k}")
+            if d["W"].shape[0] != self.cov.nrow:
+                raise ValueError(
+                    f"deflation cache {cache} has nrow={d['W'].shape[0]} but this "
+                    f"workspace has nrow={self.cov.nrow}: the cache was harvested "
+                    f"for a different mask/ivar geometry and is not reusable here.")
+            # Restore the escalated preconditioner the basis was harvested with
+            # (the solve would otherwise re-escalate it from scratch), then
+            # re-form C W in-process (apply_C is process-local; only W is
+            # portable).  W is exact regardless, so a stale scale costs at most
+            # a few CG iterations, never correctness.
+            if "precond_scale" in d:
+                self.cov._build_precond(float(d["precond_scale"]))
+            self._defl = DeflationSpace(self.cov.apply_C,
+                                        jnp.asarray(d["W"]), aw_batch=aw_batch)
+            self._log(f"deflation space loaded from {cache}: k={self._defl.k} "
+                      f"in {time.time() - t0:.1f}s")
+            return self._defl.k
+
         steps = steps or self.deflation_steps
         n_probes = self.deflation_probes if n_probes is None else int(n_probes)
         if n_probes < 1:
@@ -355,9 +401,19 @@ class QMLWorkspace:
         self._solve(warm)
         self._defl = build_deflation(self.cov.apply_C, self.cov.apply_precond,
                                      self.cov.nrow, k, steps=steps,
-                                     n_probes=n_probes, seed=seed)
+                                     n_probes=n_probes, seed=seed,
+                                     aw_batch=aw_batch)
         self._log(f"deflation space built: k={self._defl.k} in "
                   f"{time.time() - t0:.1f}s")
+        if cache:
+            # tmp must end in .npz or np.savez appends it and os.replace misses
+            tmp = f"{cache}.{os.getpid()}.tmp.npz"
+            np.savez(tmp, W=np.asarray(self._defl.W),
+                     precond_scale=np.float64(self.cov._precond_scale),
+                     k=np.int64(self._defl.k), nside=np.int64(self.nside),
+                     lmax=np.int64(self.lmax))
+            os.replace(tmp, cache)            # atomic publish
+            self._log(f"deflation basis saved to {cache}")
         return self._defl.k
 
     def _ensure_deflation(self):
@@ -402,59 +458,35 @@ class QMLWorkspace:
         return jnp.concatenate(ybs, axis=0), jnp.concatenate(yls, axis=0)
 
     # ----------------------------------------------------------- exact engine --
-    def run_exact(self, sample_frac=None, sample_seed=0):
-        """Deterministic (or column-subsampled) response computation.
+    def _fisher_sel(self, sample_frac, sample_seed):
+        """Column selection for Fisher. Returns (sel, scale_l)."""
+        K = self.index.nmodes
+        nl = self.ls.size
+        lmode = np.asarray(self.index.l) - self.lmin
+        if sample_frac is None or sample_frac >= 1.0:
+            return np.arange(K), np.ones(nl)
+        rng = np.random.default_rng(sample_seed)
+        sel = []
+        scale_l = np.ones(nl)
+        for li in range(nl):
+            kl = np.flatnonzero(lmode == li)
+            n = max(1, int(round(sample_frac * kl.size)))
+            sel.append(rng.choice(kl, size=n, replace=False))
+            scale_l[li] = kl.size / n
+        return np.sort(np.concatenate(sel)), scale_l
 
-        Solves V = M G over (comp, l, m) mode columns with batched CG and
-        accumulates the l-resolved response tensor
-
-            T[a,b,c,d](l1,l2) = sum_{k in l1, k' in l2} H[ak,ck'] H[bk,dk'],
-            H = G^T M G,
-
-        from which the binned response R, per-multipole windows F_bl and
-        noise bias n follow for any binning.  Cost: n_columns CG solves
-        (batched); memory: O(Nc^4 nl^2), never the dense H.
-
-        With ``sample_frac = f < 1`` only a random fraction of the k'
-        columns is solved -- stratified per l' (>= 1 column each, sampled
-        without replacement) and renormalized by N_l'/n_l', which keeps the
-        estimator exactly unbiased.  Because the row index of H is always
-        summed exactly (it comes from one adjoint SHT per solve), the
-        sampling noise is *local in bands*: the induced offset on band A is
-        ~ sigma_A * SNR_A * sqrt(rho (1-f)/n_A) with the band's own S/N,
-        in contrast to the sims-MC engine whose Wishart noise couples all
-        bands coherently (offset ~ sigma_A * sqrt(SNR_tot^2/N_sims)).
-        The sampled R is symmetrized; for very small f check its
-        conditioning.
-        """
-        self._prepare_deprojection()
-        self._ensure_deflation()
+    def _fisher_body(self, sel):
+        """Batched CG column solve. Returns (T, W2d) as unscaled numpy arrays."""
         Nc, K = len(self.comp_names), self.index.nmodes
         nl = self.ls.size
         lmode = np.asarray(self.index.l) - self.lmin
-        # column selection (all modes, or stratified subsample per l)
-        if sample_frac is None or sample_frac >= 1.0:
-            sel = np.arange(K)
-            scale_l = np.ones(nl)
-        else:
-            rng = np.random.default_rng(sample_seed)
-            sel = []
-            scale_l = np.ones(nl)
-            for li in range(nl):
-                kl = np.flatnonzero(lmode == li)
-                n = max(1, int(round(sample_frac * kl.size)))
-                sel.append(rng.choice(kl, size=n, replace=False))
-                scale_l[li] = kl.size / n
-            sel = np.sort(np.concatenate(sel))
         nsel = sel.size
         # T and W2d accumulate on device; transferred to host once at the end
         # (per-l host syncs dominated the runtime otherwise)
         T_dev = jnp.zeros((Nc, Nc, Nc, Nc, nl, nl))
         W2d_dev = jnp.zeros((Nc, Nc, K))
         noisevar = self.cov.noisevar
-
         J = max(1, self.batch_size // Nc)
-        t0 = time.time()
         for j0 in range(0, nsel, J):
             kcols = sel[j0:j0 + J]
             jc = kcols.size
@@ -483,13 +515,19 @@ class QMLWorkspace:
             if self.verbose and (j0 // J) % 8 == 0:
                 self._log(f"exact response {j0 + jc}/{nsel} columns "
                           f"(cg {self.last_cg[0]} it)")
+        return np.asarray(T_dev), np.asarray(W2d_dev)
+
+    def _fisher_assemble(self, T, W2d, scale_l):
+        """Scale and assemble R_hat, F_l_hat, n_hat from accumulated T and W2d."""
+        Nc = len(self.comp_names)
+        nl = self.ls.size
+        lmode = np.asarray(self.index.l) - self.lmin
+        ns = len(self.spec_pairs)
         # stratified-subsample renormalization (no-op when all columns run)
-        T = np.asarray(T_dev) * scale_l[None, None, None, None, None, :]
-        W2d = np.asarray(W2d_dev) * scale_l[lmode][None, None, :]
+        T = T * scale_l[None, None, None, None, None, :]
+        W2d = W2d * scale_l[lmode][None, None, :]
 
         # ---- assemble response / windows / noise bias -----------------------
-        ns = len(self.spec_pairs)
-
         def pairs(c, d):
             return [(c, d)] if c == d else [(c, d), (d, c)]
 
@@ -530,9 +568,87 @@ class QMLWorkspace:
         self.R_inv = np.linalg.inv(self.R_hat)
         self.ybar_fid = None
         self._mc_done = True
+
+    def run_exact(self, sample_frac=None, sample_seed=0):
+        """Deterministic (or column-subsampled) response computation.
+
+        Solves V = M G over (comp, l, m) mode columns with batched CG and
+        accumulates the l-resolved response tensor
+
+            T[a,b,c,d](l1,l2) = sum_{k in l1, k' in l2} H[ak,ck'] H[bk,dk'],
+            H = G^T M G,
+
+        from which the binned response R, per-multipole windows F_bl and
+        noise bias n follow for any binning.  Cost: n_columns CG solves
+        (batched); memory: O(Nc^4 nl^2), never the dense H.
+
+        With ``sample_frac = f < 1`` only a random fraction of the k'
+        columns is solved -- stratified per l' (>= 1 column each, sampled
+        without replacement) and renormalized by N_l'/n_l', which keeps the
+        estimator exactly unbiased.  Because the row index of H is always
+        summed exactly (it comes from one adjoint SHT per solve), the
+        sampling noise is *local in bands*: the induced offset on band A is
+        ~ sigma_A * SNR_A * sqrt(rho (1-f)/n_A) with the band's own S/N,
+        in contrast to the sims-MC engine whose Wishart noise couples all
+        bands coherently (offset ~ sigma_A * sqrt(SNR_tot^2/N_sims)).
+        The sampled R is symmetrized; for very small f check its
+        conditioning.
+        """
+        self._prepare_deprojection()
+        self._ensure_deflation()
+        K = self.index.nmodes
+        sel, scale_l = self._fisher_sel(sample_frac, sample_seed)
+        t0 = time.time()
+        T, W2d = self._fisher_body(sel)
+        self._fisher_assemble(T, W2d, scale_l)
         self._log(f"exact response done in {(time.time() - t0) / 60:.1f} min "
-                  f"({nsel}/{K} columns, "
+                  f"({sel.size}/{K} columns, "
                   f"condition {np.linalg.cond(self.R_hat):.2e})")
+
+    def run_exact_chunk(self, chunk_id, n_chunks, sample_frac=None, sample_seed=0):
+        """Solve Fisher for the chunk_id-th stripe of columns.
+
+        Returns a dict suitable for np.savez(**result) / np.load().
+        Strided assignment (sel[chunk_id::n_chunks]) distributes all l-values
+        evenly across chunks so each job has a representative column set.
+        """
+        self._prepare_deprojection()
+        self._ensure_deflation()
+        sel, scale_l = self._fisher_sel(sample_frac, sample_seed)
+        chunk_sel = sel[chunk_id::n_chunks]
+        self._log(f"chunk {chunk_id}/{n_chunks}: {chunk_sel.size}/{sel.size} columns")
+        T, W2d = self._fisher_body(chunk_sel)
+        return {
+            'T': T, 'W2d': W2d, 'scale_l': scale_l,
+            'chunk_id': np.int64(chunk_id), 'n_chunks': np.int64(n_chunks),
+            'n_sel_full': np.int64(sel.size), 'K': np.int64(self.index.nmodes),
+        }
+
+    def assemble_fisher_chunks(self, paths_or_dicts):
+        """Sum partial Fisher chunks then assemble R_hat / n_hat / F_l_hat.
+
+        paths_or_dicts: iterable of file paths (str/Path) or dicts as returned
+        by run_exact_chunk.
+        """
+        self._prepare_deprojection()
+        self._ensure_deflation()
+        T_sum = None
+        W2d_sum = None
+        scale_l = None
+        n_loaded = 0
+        for item in paths_or_dicts:
+            d = (np.load(item, allow_pickle=False)
+                 if isinstance(item, (str, os.PathLike)) else item)
+            T_sum = d['T'].copy() if T_sum is None else T_sum + d['T']
+            W2d_sum = d['W2d'].copy() if W2d_sum is None else W2d_sum + d['W2d']
+            if scale_l is None:
+                scale_l = np.asarray(d['scale_l'])
+            n_loaded += 1
+        if T_sum is None:
+            raise ValueError("assemble_fisher_chunks: no chunks provided")
+        self._log(f"assembling {n_loaded} chunks")
+        self._fisher_assemble(T_sum, W2d_sum, scale_l)
+        self._log(f"assembled  condition {np.linalg.cond(self.R_hat):.2e}")
 
     # ------------------------------------------------------------- MC engine --
     def run_mc(self, n_sims_fisher=None, n_sims_noise=None):

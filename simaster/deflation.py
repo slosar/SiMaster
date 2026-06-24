@@ -71,11 +71,23 @@ class DeflationSpace:
     further operator applies.
     """
 
-    def __init__(self, apply_A, W):
+    def __init__(self, apply_A, W, aw_batch=None):
         W = jnp.asarray(W)
         self.W = W
         self.k = int(W.shape[1])
-        self.AW = apply_A(W)                       # C W  (n, k)
+        # C W: a matrix-free operator apply on k columns at once.  For an
+        # on-device SHT backend (s2fft) the operator's working set grows with
+        # the column batch width, so a wide k (deflation rank) can blow up GPU
+        # memory here even though storing AW itself is tiny -- this single
+        # ``apply_A(W)`` was the dominant allocation at nside=128 (tens of GB
+        # for k>=50).  Apply in column blocks of ``aw_batch`` (column-wise, so
+        # exactly equal to the full apply) to cap the peak; None means one shot.
+        if aw_batch is None or self.k <= aw_batch:
+            self.AW = apply_A(W)                   # C W  (n, k)
+        else:
+            self.AW = jnp.concatenate(
+                [apply_A(W[:, j:j + aw_batch])
+                 for j in range(0, self.k, aw_batch)], axis=1)
         E = W.T @ self.AW                          # Wᵀ C W
         self.E = 0.5 * (E + E.T)
         # Precompute the dense k x k inverse so the per-iteration coarse solve
@@ -169,12 +181,14 @@ def harvest_ritz(apply_A, apply_M, probe, k, m, tol=0.0):
 
 
 def build_deflation(apply_A, apply_M, n, k, steps=None, n_probes=1, seed=0,
-                    tol=0.0):
+                    tol=0.0, aw_batch=None):
     """Convenience: harvest a :class:`DeflationSpace` from random probes.
 
     Runs :func:`harvest_ritz` on ``n_probes`` independent white-noise probes,
     stacks the Ritz vectors, re-orthonormalizes, and wraps the result.  More
-    probes broaden the captured subspace at linear cost.
+    probes broaden the captured subspace at linear cost.  ``aw_batch`` caps the
+    column-batch width of the one-off ``C W`` apply (see
+    :class:`DeflationSpace`); set it for on-device SHT backends at large k.
     """
     if n_probes < 1:
         raise ValueError("n_probes must be >= 1")
@@ -186,10 +200,11 @@ def build_deflation(apply_A, apply_M, n, k, steps=None, n_probes=1, seed=0,
         probe = jax.random.normal(sub, (n, 1), dtype=jnp.float64)
         W, _ = harvest_ritz(apply_A, apply_M, probe, k, steps, tol=tol)
         cols.append(W)
+    W = jnp.concatenate(cols, axis=1)                       # (n, n_probes * kk)
     if W.shape[1] > k:                                      # trim to k via QR
         W, _ = jnp.linalg.qr(W)
         W = W[:, :k]
-    return DeflationSpace(apply_A, W)
+    return DeflationSpace(apply_A, W, aw_batch=aw_batch)
 
 
 def dense_eig_deflation(apply_A, apply_M, n, k):

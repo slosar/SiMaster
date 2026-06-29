@@ -223,6 +223,57 @@ Two engines:
   Hartlap factor is applied; residual non-Gaussian corrections to it are
   `O(n_bins/n_sims)`.
 
+## MC Fisher uncertainty and the automatic harness
+
+The MC engine returns a *noisy* `R̂`; like the subsampling error it does not
+average away in one analysis, so `simaster.mc_fisher` quantifies it — the MC
+analog of `simaster.subsample`. From a set of per-seed estimates (each `R̂` from
+`nsims` draws plus its reference mean `ȳ`), `MCFisherStore` gives the combined
+`F̂` and:
+
+* **element-wise σ(F̂_ab)** — the Wishart variance
+  `Var[F̂_ab] = (F_aa F_bb + F_ab²)/(N_eff − 1)`, cross-checked by the
+  seed-to-seed scatter (model-free, needs ≥2 seeds). Verified: the median
+  relative σ on the diagonal equals `√(2/N_eff)`.
+* **error-bar calibration.** A *frozen* `F̂` (one realization, as in any real
+  run) makes the bandpower *pulls* scale as `1/√h` with the Anderson–Hartlap
+  factor `h = (N_eff − n_b − 2)/(N_eff − 1)` — the inverse-Wishart /
+  Dodelson–Schneider effect, verified to 0.5% over `N_eff = 512…3072`. So the
+  honest 1σ bandpower error bar is `√diag(F̂⁻¹)` (the Hartlap-shrunk covariance
+  divided by `h`); `MCFisherStore.bandpower_cov(calibrated=True)` returns it and
+  `pull → 1`. A single short MC under-covers: e.g. nside=128 `nsims=512`
+  (`h≈0.43`) gives pull 1.52 while χ²/dof≈1 (misleading); averaging 6 seeds
+  (`N_eff=3072`, `h≈0.91`) → pull 1.05 — seed-averaging is mandatory at high
+  nside.
+* **suboptimality / dRnorm** vs an exact `F` if supplied, and a **held-out χ²**
+  (`held_out_chi2`) on independent sims that did *not* enter `F̂` — a
+  circularity-free bias check.
+
+Per-seed estimates are concatenable (`MCFisherStore.merge`), so a distributed
+run saves one store per rank and merges them. See `compute_mc_error`.
+
+### Automatic harness (`simaster.run_auto`, `simaster.fisher_auto`)
+
+`run_auto(scheduler, problem, nside, outdir, k='auto', …)` runs the whole
+workflow over a pluggable `Scheduler`:
+
+  i.   **pilot** — time a deflation-`k` grid and pick the `k` minimising MC wall
+       (harvest + `nsims`·per-solve); for ducc at nside=128 this is a shallow
+       basin around `k≈800` (CG iters keep falling with `k` but per-solve
+       flattens and harvest grows).
+  ii.  **MC** — `n_seeds` independent seeds at the optimal `k`, one per rank.
+  iii. **combine** — merge into `F̂` + uncertainty (`compute_mc_error`) and a
+       held-out-χ² check.
+
+The `Scheduler` ABC's only contract is "run
+`python -m simaster.fisher_worker … --rank R` for `R` in `0..n−1`, in parallel,
+and block". `LocalScheduler` runs ranks in-process (portable, any machine). HPC
+backends live outside the portable core: `simaster.nersc.SlurmScheduler` fans
+ranks out with `srun` *inside one allocation*, so the entire pilot→MC→combine
+runs as a **single** SLURM job (never a job array) — see
+`simaster/nersc/run_auto.sh`. A *problem* is any importable module exposing
+`build_workspace(nside, *, fisher_mode, deflation, cg_tol, …) -> QMLWorkspace`.
+
 ## Bands, junk bands, aliasing
 
 Bandpowers are flat in `C_l` over user bands; SiMaster automatically adds

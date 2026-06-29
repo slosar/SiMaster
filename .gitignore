@@ -15,3 +15,6 @@ report/*.pdf
 .ipynb_checkpoints/
 report/*.fdb_latexmk
 report/*.fls
+# SLURM job logs (e.g. from simaster/nersc/run_auto.sh)
+*.out
+*.err

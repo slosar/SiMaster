@@ -114,6 +114,36 @@ wraps that into a `DeflationSpace`, which precomputes the coarse operator
 `solve_C(..., deflation=...)`. The solve is exact for any full-rank basis —
 only the iteration count depends on `W` (see method.md).
 
+## `simaster.mc_fisher` — MC Fisher with uncertainty
+
+`MCFisherStore(R, ybar, nsims, n=None, F_l=None)` holds per-seed MC Fisher
+estimates (sample-covariance `R̂`, reference mean `ȳ`, `nsims`); build from saved
+files with `MCFisherStore.from_files(paths_or_glob)` and combine nodes with
+`.merge(other)`. Methods: `fisher()` (combined `F̂`), `hartlap()`,
+`fisher_sigma_wishart()` / `fisher_sigma_seeds()` (element-wise σ(F̂); analytic +
+model-free), `bandpower_cov(calibrated=True)` (`F̂⁻¹`, the pull→1 error bar — the
+frozen-`F̂` inflation is `1/√h`), `suboptimality(F_exact)`, `dRnorm(F_exact)`,
+and `held_out_chi2(y_holdout, calibrated=True)` (circularity-free χ²/pull on sims
+not in `F̂`). `compute_mc_error(store, F_exact=None)` returns/prints the summary.
+
+## `simaster.fisher_auto` / `simaster.run_auto` — semi-automatic harness
+
+`run_auto(scheduler, problem, nside, outdir, *, nsims=512, n_seeds=6, k='auto',
+k_grid=(200,400,800,1600), n_holdout=100, cg_tol=1e-2, F_exact_path=None)` runs
+pilot → optimal-`k` → parallel MC → combine → held-out χ² and returns
+`(MCFisherStore, report)`. `Scheduler` is the pluggable ABC (`map(n_tasks,
+worker_argv)`); `LocalScheduler` runs ranks in-process (portable). A *problem* is
+an importable module exposing `build_workspace(nside, *, fisher_mode, deflation,
+cg_tol, seed, n_sims_fisher, n_sims_noise) -> QMLWorkspace`. The per-rank unit is
+`python -m simaster.fisher_worker`.
+
+## `simaster.nersc` — HPC adapter (SLURM/NERSC)
+
+`SlurmScheduler(cpus_per_task=256, omp_threads=128)` implements `Scheduler.map`
+by fanning ranks out with `srun` inside the current allocation, so the whole
+workflow is one multi-node SLURM job. `python -m simaster.nersc.run_auto` is the
+in-allocation driver and `simaster/nersc/run_auto.sh` the reference sbatch.
+
 ## `simaster.compute_full_master(f1, f2, bins, cl_guess=..., **opts)`
 
 NaMaster-style one-call interface; returns spectra in NaMaster row ordering.

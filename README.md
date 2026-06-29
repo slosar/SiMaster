@@ -48,7 +48,16 @@ cov = result.cov                                # bandpower covariance
   only flat band *deviations* are fitted (`estimate(deviations=True)`)
 - three response/Fisher engines: `exact` (deterministic, batched-CG mode
   probing), `subsampled` (unbiased column subsampling — several × cheaper
-  than Monte Carlo at fixed accuracy), and `mc` (scales to nside 1024)
+  than Monte Carlo at fixed accuracy), and `mc` (scales to nside 1024, with an
+  uncertainty budget — see below)
+- MC Fisher with an uncertainty budget (`simaster.mc_fisher`): the combined
+  `F̂` plus element-wise Wishart σ(F̂) (cross-checked by the seed-to-seed
+  scatter) and a closed-form `1/√Hartlap` error-bar calibration so bandpower
+  pulls → 1, with a held-out-sim χ² bias check. A semi-automatic harness
+  (`simaster.run_auto`) does pilot → optimal deflation-`k` → parallel MC →
+  combine over a pluggable `Scheduler` — `LocalScheduler` runs anywhere;
+  `simaster.nersc.SlurmScheduler` runs the whole workflow as one multi-node
+  SLURM job
 - measurable error budget for the `subsampled` engine
   (`run_exact(sample_frac=f, keep_samples=True)` then
   `QMLWorkspace.subsample_error()`): analytic stratified covariance + column
@@ -86,7 +95,8 @@ pip install -e ".[gpu]"        # or plain `pip install -e .` for CPU-only JAX
 
 ## Documentation
 
-- `docs/method.md` — the estimator, filters, MC response matrix, caveats
+- `docs/method.md` — the estimator, filters, MC response matrix, MC Fisher
+  uncertainty + the automatic harness, caveats
 - `docs/api.md` — API reference
 - `docs/migration.md` — switching from NaMaster
 - `notebooks/` — worked examples, including a NaMaster comparison

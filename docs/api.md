@@ -126,6 +126,20 @@ frozen-`F̂` inflation is `1/√h`), `suboptimality(F_exact)`, `dRnorm(F_exact)`
 and `held_out_chi2(y_holdout, calibrated=True)` (circularity-free χ²/pull on sims
 not in `F̂`). `compute_mc_error(store, F_exact=None)` returns/prints the summary.
 
+**Banded Fisher.** The mask couples a bandpower only to its ℓ-neighbours, so the
+true `F` is banded in ℓ (worst-direction error from keeping ±N ℓ-bands halves per
+band; error bars are unaffected — see `SiMasterTest/band_fisher.py`). This lets
+`F` be estimated from far fewer than `n_b` sims (the rest of `F̂` is MC noise).
+`banded_index_map(n_spectra, n_bands)` gives the ℓ-band ordinal of each bandpower
+(for a workspace: `banded_index_map(len(w.spec_pairs), w.bins.nbands)`);
+`band_fisher(F, band_of_index, N)` zeros couplings beyond `N` ℓ-bands (keeping the
+full cross-spectrum block at each offset). `store.banded(band_of_index, N)` (or
+`BandedFisher(F, band_of_index, N)`) returns the banded estimate with `.fisher`,
+`.cov` (`=F_band⁻¹`), `.errbar`, and a **self-consistency uncertainty**
+`.uncertainty()` / `.summary()`: it also forms `F_band(N+1)` and reports how much
+admitting the next ℓ-band moves the Fisher (`‖F_N⁻¹ΔF‖₂`) and the error bars
+(median/max) — converged when that change is below tolerance.
+
 ## `simaster.fisher_auto` / `simaster.run_auto` — semi-automatic harness
 
 `run_auto(scheduler, problem, nside, outdir, *, nsims=512, n_seeds=6, k='auto',

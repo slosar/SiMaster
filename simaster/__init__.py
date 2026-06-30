@@ -19,7 +19,8 @@ from .utils import cl_matrix, RealAlmIndex
 from .radical import compress, CompressedLikelihood
 from .deflation import DeflationSpace, build_deflation, harvest_ritz
 from .subsample import SubsampleStore, SubsampleError
-from .mc_fisher import MCFisherStore, compute_mc_error
+from .mc_fisher import (MCFisherStore, compute_mc_error, BandedFisher,
+                        band_fisher, banded_fisher, banded_index_map)
 from .fisher_auto import Scheduler, LocalScheduler, run_auto
 from . import score  # field-level likelihood score / autodiff (advanced)
 
@@ -29,5 +30,6 @@ __all__ = ["Field", "Bins", "QMLWorkspace", "BandpowerResult",
            "RealAlmIndex", "compress", "CompressedLikelihood", "score",
            "DeflationSpace", "build_deflation", "harvest_ritz",
            "SubsampleStore", "SubsampleError",
-           "MCFisherStore", "compute_mc_error",
+           "MCFisherStore", "compute_mc_error", "BandedFisher",
+           "band_fisher", "banded_fisher", "banded_index_map",
            "Scheduler", "LocalScheduler", "run_auto"]

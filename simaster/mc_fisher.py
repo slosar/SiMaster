@@ -147,6 +147,11 @@ class MCFisherStore:
         lam = sla.eigh(self.fisher(), F_exact, eigvals_only=True)
         return float(np.max(np.abs(lam - 1.0)))
 
+    def banded(self, band_of_index, N):
+        """Banded Fisher estimate (see :class:`BandedFisher`) from this store's
+        combined ``F-hat``, with the N->N+1 self-consistency uncertainty."""
+        return BandedFisher(self.fisher(), band_of_index, N, n_eff=self.n_eff)
+
     def held_out_chi2(self, y_holdout, calibrated=True):
         """Chi2/dof and pull from independent band-power vectors that did NOT
         enter F-hat (circularity-free).  ``y_holdout`` is (n_b, M)."""
@@ -162,6 +167,127 @@ class MCFisherStore:
         pull = (c / sig[:, None]).ravel()
         return dict(chi2dof=float(chi2.mean() / self.nb),
                     pull_std=float(pull.std()), n_holdout=int(y.shape[1]))
+
+
+def banded_index_map(n_spectra, n_bands):
+    """ell-band ordinal of each bandpower index for the standard spec-major
+    layout (bandpower index = spectrum*n_bands + ell_band), so that the
+    ell-band offset of two indices is ``|map[i] - map[j]|``.  For a
+    :class:`~simaster.qml.QMLWorkspace` ``w`` use
+    ``banded_index_map(len(w.spec_pairs), w.bins.nbands)``.
+    """
+    return np.tile(np.arange(int(n_bands)), int(n_spectra))
+
+
+def band_fisher(F, band_of_index, N):
+    """Block-banded Fisher: zero entries whose ell-band offset exceeds ``N``.
+
+    The mask couples a bandpower only to its ell-neighbours, so the true ``F``
+    is banded in ell; the full cross-spectrum block at each ell offset is kept
+    (offset 0 -- e.g. the TT/TE/EE correlation at the same ell-band -- is always
+    retained).  ``band_of_index`` is from :func:`banded_index_map`.
+    """
+    bo = np.asarray(band_of_index)
+    F = np.asarray(F, float)
+    if bo.shape[0] != F.shape[0]:
+        raise ValueError("band_of_index length must match F")
+    off = np.abs(bo[:, None] - bo[None, :])
+    return np.where(off <= N, F, 0.0)
+
+
+class BandedFisher:
+    """Banded Fisher estimate ``F_band(N)`` with a self-consistency uncertainty.
+
+    Banding lets the MC Fisher be estimated from far fewer sims than ``n_b``
+    (only the ~``(2N+1)`` ell-neighbour couplings per band carry signal; the
+    rest of ``F-hat`` is pure MC noise -- see ``SiMasterTest/band_fisher.py``).
+    The truncation/MC uncertainty is estimated *self-consistently* by also
+    forming ``F_band(N+1)`` and reporting how much the result moves when the
+    next ell-band is admitted -- if adding band ``N+1`` barely changes the
+    Fisher (and the error bars), ``N`` has converged.
+
+    Parameters
+    ----------
+    F_full : (n_b, n_b) full (sample-covariance) Fisher estimate.
+    band_of_index : (n_b,) ell-band ordinals, from :func:`banded_index_map`.
+    N : kept ell-band half-width (``|offset| <= N``).
+    n_eff : optional effective sim count, carried for reference.
+    """
+
+    def __init__(self, F_full, band_of_index, N, n_eff=None):
+        self.N = int(N)
+        self.n_eff = None if n_eff is None else int(n_eff)
+        self.band_of_index = np.asarray(band_of_index)
+        F = np.asarray(F_full, float)
+        self.F_full = 0.5 * (F + F.T)
+        self.fisher = band_fisher(self.F_full, self.band_of_index, self.N)
+        self.fisher_next = band_fisher(self.F_full, self.band_of_index, self.N + 1)
+        self.is_pd = bool(np.all(np.linalg.eigvalsh(self.fisher) > 0))
+        self.is_pd_next = bool(np.all(np.linalg.eigvalsh(self.fisher_next) > 0))
+
+    # ---- science products ---------------------------------------------------
+    @property
+    def cov(self):
+        """Bandpower covariance F_band(N)^-1 (the calibrated error bar)."""
+        return np.linalg.inv(self.fisher)
+
+    @property
+    def errbar(self):
+        """1-sigma bandpower error bars sqrt(diag F_band^-1)."""
+        return np.sqrt(np.clip(np.diag(self.cov), 0, None))
+
+    # ---- self-consistency uncertainty (N -> N+1) ----------------------------
+    def uncertainty(self):
+        """Relative change from admitting the (N+1)-th ell-band.
+
+        Returns a dict with the worst-direction Fisher change
+        ``||F_N^-1 (F_{N+1} - F_N)||_2`` and the relative change in the
+        bandpower error bars (median & max).  These bound the error made by
+        truncating at ``N`` (they fold in both residual true coupling and the
+        MC noise in band ``N+1``, so they are a conservative 1-sigma).
+        """
+        FN, FN1 = self.fisher, self.fisher_next
+        Cinv = np.linalg.inv(FN)
+        lam = np.linalg.eigvals(Cinv @ (FN1 - FN))
+        worstdir = float(np.max(np.abs(lam)).real)
+        s0 = np.sqrt(np.clip(np.diag(Cinv), 0, None))
+        s1 = np.sqrt(np.clip(np.diag(np.linalg.inv(FN1)), 0, None))
+        rel = np.abs(s1 / s0 - 1.0)
+        return dict(N=self.N, worstdir_fisher=worstdir,
+                    errbar_rel_median=float(np.median(rel)),
+                    errbar_rel_max=float(np.max(rel)),
+                    is_pd=self.is_pd, is_pd_next=self.is_pd_next)
+
+    def converged(self, tol=0.01):
+        """True if admitting band N+1 moves the error bars by < ``tol`` (median)."""
+        return self.uncertainty()["errbar_rel_median"] < tol
+
+    def summary(self, verbose=True):
+        u = self.uncertainty()
+        if verbose:
+            ne = "" if self.n_eff is None else f" n_eff={self.n_eff}"
+            print(f"[banded-fisher] N={self.N}{ne}  PD={u['is_pd']}")
+            print(f"  uncertainty from admitting band N+1={self.N + 1}:")
+            print(f"    worst-direction Fisher change ||F_N^-1 dF||_2 = "
+                  f"{u['worstdir_fisher']:.4f}")
+            print(f"    error-bar relative change: median={u['errbar_rel_median']:.4f} "
+                  f"max={u['errbar_rel_max']:.4f}")
+            print(f"    -> {'CONVERGED' if u['errbar_rel_median'] < 0.01 else 'not converged'} "
+                  f"at 1% error-bar tol")
+        return u
+
+
+def banded_fisher(F_or_store, band_of_index, N, verbose=True):
+    """Build a :class:`BandedFisher` from a full ``F`` array or an
+    :class:`MCFisherStore`, print the N->N+1 self-consistency uncertainty, and
+    return it."""
+    if isinstance(F_or_store, MCFisherStore):
+        F = F_or_store.fisher(); n_eff = F_or_store.n_eff
+    else:
+        F = F_or_store; n_eff = None
+    bf = BandedFisher(F, band_of_index, N, n_eff=n_eff)
+    bf.summary(verbose=verbose)
+    return bf
 
 
 def compute_mc_error(store, F_exact=None, verbose=True):

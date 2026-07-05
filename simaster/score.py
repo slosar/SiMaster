@@ -88,7 +88,7 @@ def quad_loglike(ws, cb, data):
     def matvec(cb, x):
         A = cov.to_modes(x)
         A = jnp.einsum("cdk,dkb->ckb", cl_k_of(cb), A)
-        return cov.from_modes(A) + cov.noisevar[:, None] * x
+        return cov.from_modes(A) + cov.noise.apply(x)
 
     def solve(mv, b):
         x, _ = pcg(mv, cov.apply_precond, b, tol=ws.cg_tol,

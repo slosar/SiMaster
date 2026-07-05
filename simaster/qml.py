@@ -195,6 +195,10 @@ class QMLWorkspace:
     template_alpha : None (default) -> exact deprojection (alpha -> inf,
         Woodbury); finite value -> add alpha_rel*tr(C)/||t||^2 * t t^T to C.
     deproject_low_ell : marginalize monopole+dipole of every spin-0 field.
+    noise_cov : PixelNoiseCov, optional.  Per-pixel block pixel-noise model
+        (e.g. ``PixelNoiseCov.iqu(...)`` for correlated I/Q/U noise, or built
+        with ``sm.iqu_from_cov``).  Default: diagonal 1/ivar from each field.
+        Its field list/order and nrow must match this workspace's fields.
     backend : 'dense' (GPU GEMM, nside <~ 64), 'ducc' (matrix-free CPU
         transforms via callback, any nside), 's2fft' (native-JAX matrix-free
         transforms that stay on the accelerator -- opt-in, needs an s2fft
@@ -219,7 +223,7 @@ class QMLWorkspace:
                  cg_maxiter=700, seed=1234, template_alpha=None,
                  deproject_low_ell=True, batch_size=256, cachedir=None,
                  deflation=0, deflation_steps=None, deflation_probes=1,
-                 verbose=True):
+                 noise_cov=None, verbose=True):
         if isinstance(fields, Field):
             fields = [fields]
         self.fields = fields
@@ -299,7 +303,7 @@ class QMLWorkspace:
         self.fisher_frac = fisher_frac
         t0 = time.time()
         self.cov = CovModel(fields, clmat, self.index, backend=backend,
-                            cachedir=cachedir)
+                            cachedir=cachedir, noise=noise_cov)
         self._add_templates(extra_templates)
         if template_alpha is not None:
             self.cov.set_template_alpha(template_alpha)
@@ -489,7 +493,6 @@ class QMLWorkspace:
         T0 = jnp.zeros((Nc, Nc, Nc, Nc, nl, nl))
         W20 = jnp.zeros((Nc, Nc, K))
         m0 = self._diag_cinv_weights()
-        noisevar = self.cov.noisevar
         J = max(1, self.batch_size // Nc)
         t0 = time.time()
         for j0 in range(0, K, J):
@@ -504,7 +507,7 @@ class QMLWorkspace:
             A0 = self.cov.to_modes(V0)
             H0 = A0.reshape(Nc, K, jc, Nc).transpose(0, 1, 3, 2)
             Vr0 = V0.reshape(-1, jc, Nc)
-            w20_batch = jnp.einsum("pjc,p,pjd->cdj", Vr0, noisevar, Vr0)
+            w20_batch = self.cov.noise.quad_cdj(Vr0)
             W20 = W20.at[:, :, jnp.asarray(kcols)].add(w20_batch)
             lj = jnp.asarray(lmode[kcols])
             for l1 in range(nl):
@@ -592,7 +595,6 @@ class QMLWorkspace:
         # device and transfer to host once at the end.
         T_dev = jnp.zeros((Nc, Nc, Nc, Nc, nl, nl))
         W2d_dev = jnp.zeros((Nc, Nc, K))
-        noisevar = self.cov.noisevar
         slab_store = nslab_store = None
         m0 = self._diag_cinv_weights() if control == "pseudo_cl" else None
 
@@ -635,13 +637,13 @@ class QMLWorkspace:
             A = self.cov.to_modes(V)                      # (Nc, K, jc*Nc)
             H = A.reshape(Nc, K, jc, Nc).transpose(0, 1, 3, 2)  # (a,k,c',j)
             Vr = V.reshape(-1, jc, Nc)
-            w2d_batch = jnp.einsum("pjc,p,pjd->cdj", Vr, noisevar, Vr)
+            w2d_batch = self.cov.noise.quad_cdj(Vr)
             if control == "pseudo_cl":
                 V0 = m0[:, None] * Gc
                 A0 = self.cov.to_modes(V0)
                 H0 = A0.reshape(Nc, K, jc, Nc).transpose(0, 1, 3, 2)
                 Vr0 = V0.reshape(-1, jc, Nc)
-                w2d0_batch = jnp.einsum("pjc,p,pjd->cdj", Vr0, noisevar, Vr0)
+                w2d0_batch = self.cov.noise.quad_cdj(Vr0)
                 w2d_add = w2d_batch - w2d0_batch
             else:
                 H0 = None

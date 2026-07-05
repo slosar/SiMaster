@@ -15,6 +15,29 @@ A spin-0 (`maps=[m]`) or spin-2 (`maps=[Q, U]`) field. `mask`, `maps`,
 - `Bins.linear(lmin, lmax, nlb)`, `Bins.from_nside_linear(nside, nlb)`.
 - `get_effective_ells()`, `bin_cl(cl)`, `unbin_cl(cb, lmax)`.
 
+## `simaster.PixelNoiseCov` / `simaster.iqu_from_cov` — correlated pixel noise
+
+Per-pixel **block-diagonal** noise covariance `N`. The default estimator noise
+is a scalar `1/ivar` per row; `PixelNoiseCov` generalizes this to small dense
+per-pixel blocks — e.g. a 3×3 I/Q/U block that couples a spin-0 (I) field and a
+spin-2 (Q, U) field, as delivered by the Planck NPIPE `wcov` products
+(II, IQ, IU, QQ, QU, UU). `N` stays block-diagonal *in sky pixel* (matrix-free);
+pixel–pixel correlations are not representable. It enters the estimator only
+through `apply` (`N x`), `apply_inv` (`N⁻¹ x`), `sqrt_apply` (`N^½ x`),
+`quad_cdj` (`Vᵀ N V` noise-bias windows) and `dense` (tiny-nside reference);
+`ivar_eff = diag(N⁻¹)` feeds the preconditioner bound.
+
+- `PixelNoiseCov(fields, noisevar=None, groups=None)` — low-level constructor;
+  `groups` are disjoint per-pixel coupling blocks.
+- `PixelNoiseCov.iqu(fields, *, II, IQ, IU, QQ, QU, UU)` — build the 3×3 I/Q/U
+  coupling from exactly one spin-0 and one spin-2 field sharing `obs_pix`.
+- `iqu_from_cov(mask, maps, cov_maps, *, beam=None, names=("T","P"), nest=False)`
+  → `(f0, f2, noise)` — one-call helper that builds the I and Q/U `Field`s *and*
+  their coupled `PixelNoiseCov`, guaranteeing a shared pixel set and an
+  ivar-consistent block diagonal. `cov_maps` is `[II, IQ, IU, QQ, QU, UU]` in
+  K_CMB²; pass `nest=True` for NESTED inputs (NPIPE maps/wcov are NESTED).
+  Feed the returned `noise` as `QMLWorkspace(..., noise_cov=noise)`.
+
 ## `simaster.QMLWorkspace(fields, bins, cl_fid, **opts)`
 
 Precomputes everything tied to (fields, fiducial, bins). Important options:
@@ -24,6 +47,7 @@ Precomputes everything tied to (fields, fiducial, bins). Important options:
 | `lmax` | `3*nside-1` | covariance bandlimit (aliasing caveat in method.md) |
 | `lmin` | 2 | lowest multipole in the band basis |
 | `backend` | auto | `'dense'` (GPU GEMM, nside≲64), `'ducc'` (matrix-free CPU), or `'s2fft'` (native-JAX on-device; opt-in, needs fixed s2fft — see method.md) |
+| `noise_cov` | None | `PixelNoiseCov` for per-pixel *block* noise (e.g. correlated I/Q/U); default is diagonal `1/ivar` per field. Its field list/order and `nrow` must match the workspace |
 | `fisher_mode` | auto | `'exact'`, `'subsampled'`, or `'mc'` (see method.md) |
 | `fisher_frac` | 0.25 | fraction of mode columns solved in `'subsampled'` mode |
 | `fisher_control_variate` | None | experimental: `'pseudo_cl'` uses a deterministic pseudo-Cl/MASTER-style local-diagonal `Cinv` response as a control variate for the exact/subsampled Fisher engine |

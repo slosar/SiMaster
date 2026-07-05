@@ -12,11 +12,13 @@ from __future__ import annotations
 import numpy as np
 
 from .utils import RealAlmIndex
+from .noise import PixelNoiseCov
 from . import sht
 
 
 class ExactQML:
-    def __init__(self, fields, bins_ext, clmat, index: RealAlmIndex):
+    def __init__(self, fields, bins_ext, clmat, index: RealAlmIndex,
+                 noise=None):
         self.fields, self.bins, self.index = fields, bins_ext, index
         K = index.nmodes
         # global G = W Y B, modes stacked like CovModel (comps major)
@@ -37,19 +39,22 @@ class ExactQML:
             G[r0:r0 + g.shape[0], c0 * K:(c0 + f.ncomp) * K] = g
             r0 += g.shape[0]; c0 += f.ncomp
         self.G = G
-        self.noisevar = np.concatenate(
-            [np.tile(1.0 / f.ivar, f.ncomp) for f in fields])
+        if noise is None:
+            noise = PixelNoiseCov(fields)
+        self.noise = noise
+        self.noisevar = np.asarray(noise.noisevar)
+        Ndense = noise.dense()                        # (nrow, nrow), block N
         # dense C
         clk = clmat[:, :, index.l]                    # (Nc, Nc, K)
         SG = np.zeros_like(G)
         for c in range(ncomp):
             for d in range(ncomp):
                 SG[:, c * K:(c + 1) * K] += G[:, d * K:(d + 1) * K] * clk[d, c][None, :]
-        self.C = SG @ G.T + np.diag(self.noisevar)
+        self.C = SG @ G.T + Ndense
         self.Cinv = np.linalg.inv(self.C)
         V = self.Cinv @ G
         self.H = G.T @ V                              # (Nc*K, Nc*K)
-        self.W2 = (V.T * self.noisevar[None, :]) @ V
+        self.W2 = V.T @ Ndense @ V
 
         self.spec_pairs = [(i, j) for i in range(ncomp) for j in range(i, ncomp)]
 

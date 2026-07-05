@@ -33,6 +33,7 @@ import jax
 import jax.numpy as jnp
 
 from .utils import RealAlmIndex, matrix_sqrt_psd
+from .noise import PixelNoiseCov
 from . import sht
 
 
@@ -52,7 +53,7 @@ class CovModel:
     """
 
     def __init__(self, fields, clmat, index: RealAlmIndex, backend="dense",
-                 cachedir=None, dtype=jnp.float64):
+                 cachedir=None, dtype=jnp.float64, noise=None):
         self.fields = fields
         self.index = index
         self.backend = backend
@@ -74,10 +75,16 @@ class CovModel:
         # ---- per-field weights, noise ---------------------------------------
         self.w = [jnp.asarray(np.tile(f.mask, (f.ncomp, 1)), dtype=dtype)
                   for f in fields]                       # (ncomp, nobs)
-        self.noisevar = jnp.concatenate(
-            [jnp.asarray(np.tile(1.0 / f.ivar, f.ncomp), dtype=dtype)
-             for f in fields])                            # (nrow,)
-        self.ivar_vec = 1.0 / self.noisevar
+        # Pixel noise N: a per-pixel block operator (diagonal by default; may
+        # carry I/Q/U or Q/U correlations).  noisevar/ivar_vec remain the
+        # exact per-row diagonal for code that only needs the diagonal part.
+        if noise is None:
+            noise = PixelNoiseCov(fields)
+        elif noise.nrow != self.nrow:
+            raise ValueError(f"noise has nrow={noise.nrow}, expected {self.nrow}")
+        self.noise = noise
+        self.noisevar = jnp.asarray(noise.noisevar, dtype=dtype)   # (nrow,)
+        self.ivar_vec = jnp.asarray(noise.ivar_diag, dtype=dtype)
         self.beams = [None if f.beam is None
                       else jnp.asarray(f.beam[index.l], dtype=dtype)
                       for f in fields]                    # b_l per mode
@@ -128,14 +135,19 @@ class CovModel:
         L = self.index.lmax
         npix_full = 12 * self.nside ** 2
         self._precond_scale = d_scale
+        # Effective inverse-variance is diag(N^-1) per row, so the Woodbury
+        # bound reflects the *block* noise (diag(N^-1) >= 1/diag(N) when the
+        # block has off-diagonal coupling), not just 1/diag(N).
+        ivar_eff = np.asarray(self.noise.ivar_eff)
         D = np.zeros((self.ncomp, L + 1))
-        for f, comps in zip(self.fields, self.comp_of_field):
-            w2i = (f.mask ** 2) * f.ivar
-            d_mean = float(np.sum(w2i)) / (4.0 * np.pi)
-            d_max = 2.0 * float(np.max(w2i)) * npix_full / (4.0 * np.pi)
-            d = min(d_scale * d_mean, d_max)
+        for f, comps, sl in zip(self.fields, self.comp_of_field, self.slices):
+            ie = ivar_eff[sl].reshape(f.ncomp, f.nobs)   # (ncomp_local, nobs)
             bl2 = np.ones(L + 1) if f.beam is None else f.beam[: L + 1] ** 2
-            for c in comps:
+            for cl, c in enumerate(comps):
+                w2i = (f.mask ** 2) * ie[cl]
+                d_mean = float(np.sum(w2i)) / (4.0 * np.pi)
+                d_max = 2.0 * float(np.max(w2i)) * npix_full / (4.0 * np.pi)
+                d = min(d_scale * d_mean, d_max)
                 D[c] = d * bl2
         Dm = np.moveaxis(D, -1, 0)                       # (L+1, Nc)
         Ch = np.moveaxis(self.clmat, -1, 0)              # (L+1, Nc, Nc)
@@ -236,7 +248,7 @@ class CovModel:
         """C x for a batch x of shape (nrow, B)."""
         A = self.to_modes(x)
         A = jnp.einsum("cdk,dkb->ckb", self.cl_k, A)
-        out = self.from_modes(A) + self.noisevar[:, None] * x
+        out = self.from_modes(A) + self.noise.apply(x)
         if self.template_alpha is not None:
             out = out + self.Tmat @ (self.template_alpha[:, None]
                                      * (self.Tmat.T @ x))
@@ -244,11 +256,11 @@ class CovModel:
 
     def apply_precond(self, y):
         """Approximate C^-1 y (see module docstring)."""
-        ny = self.ivar_vec[:, None] * y
+        ny = self.noise.apply_inv(y)               # N^-1 y (per-pixel block)
         A = self.to_modes(ny)
         A = jnp.einsum("kcd,dkb->ckb", self.T_k, A)
         v = self.from_modes(A)
-        return ny - self.ivar_vec[:, None] * v
+        return ny - self.noise.apply_inv(v)
 
     def sample(self, key, nbatch: int):
         """Draw x ~ N(0, C) (fiducial signal + noise [+ alpha templates])."""
@@ -257,7 +269,7 @@ class CovModel:
         A = jnp.einsum("kcd,kdb->ckb", self.sqrt_cl_k, xi)
         x = self.from_modes(A)
         eta = jax.random.normal(k2, x.shape, dtype=self.dtype)
-        x = x + jnp.sqrt(self.noisevar)[:, None] * eta
+        x = x + self.noise.sqrt_apply(eta)
         if self.template_alpha is not None:
             zt = jax.random.normal(k3, (self.n_templates, nbatch), dtype=self.dtype)
             x = x + self.Tmat @ (jnp.sqrt(self.template_alpha)[:, None] * zt)
@@ -266,10 +278,11 @@ class CovModel:
     def sample_noise(self, key, nbatch: int, probe: str = "rademacher"):
         """Noise-bias probe vectors with E[x x^T] = N.
 
-        'rademacher' (default): N^(1/2) d with d in {+-1}; exact since N is
-        diagonal, and the Hutchinson variance 2*sum_{i!=j} X_ij^2 drops the
-        diagonal term that dominates for noise-dominated bands.  'gaussian'
-        draws actual noise realizations (same mean, larger variance).
+        'rademacher' (default): N^(1/2) d with d in {+-1}; E[d d^T] = I so
+        E[(N^1/2 d)(N^1/2 d)^T] = N exactly regardless of N's structure, and
+        the Hutchinson variance 2*sum_{i!=j} X_ij^2 drops the diagonal term
+        that dominates for noise-dominated bands.  'gaussian' draws actual
+        noise realizations (same mean, larger variance).
         Only the *mean* of the quadratic statistics is used downstream, so
         non-Gaussian probes are exact here -- unlike the response-matrix
         sims in :meth:`sample`, whose covariance identity needs Gaussianity.
@@ -279,4 +292,4 @@ class CovModel:
                                         dtype=self.dtype)
         else:
             eta = jax.random.normal(key, (self.nrow, nbatch), dtype=self.dtype)
-        return jnp.sqrt(self.noisevar)[:, None] * eta
+        return self.noise.sqrt_apply(eta)

@@ -15,6 +15,15 @@ data vector entirely (infinite noise = zero weight). A spin-0 field
 contributes one map, a spin-2 field contributes `[Q, U]` and its spectra are
 E and B.
 
+`N` need not be strictly diagonal: passing a `PixelNoiseCov`
+(`QMLWorkspace(..., noise_cov=...)`) lets it carry small **per-sky-pixel
+blocks** — e.g. the 3×3 I/Q/U covariance that couples a spin-0 (I) field and a
+spin-2 (Q, U) field, as in the Planck NPIPE `wcov` products. `N` stays
+block-diagonal in pixel space (matrix-free); `apply`/`apply_inv`/`sqrt`/`Vᵀ N V`
+all have exact per-block analogues, and the preconditioner uses the true
+`diag(N⁻¹)`. Pixel–pixel correlations remain out of scope. Build both fields
+and the coupled noise in one call with `simaster.iqu_from_cov` (see api.md).
+
 The concatenated data vector `x` over all field components has covariance
 
 ```

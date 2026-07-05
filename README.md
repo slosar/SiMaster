@@ -111,3 +111,15 @@ density + weak lensing with pyccl theory spectra). Each runs 100
 realizations at nside=32 at fixed mask and checks the chi^2 distribution of
 the recovered bandpowers against the input. `scripts/bench_feasibility.py`
 measures the cost drivers and projects nside=1024 requirements.
+
+## License
+
+SiMaster is free software, licensed under the GNU General Public License
+version 3 or (at your option) any later version (GPL-3.0-or-later). See the
+[LICENSE](LICENSE) file for the full text.
+
+Copyright (C) 2026 Anze Slosar and contributors.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.

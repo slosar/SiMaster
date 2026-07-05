@@ -46,7 +46,7 @@ class CovModel:
     clmat : (ncomp_tot, ncomp_tot, lmax+1) fiducial spectra incl. noise-free
         signal only (noise comes from ivar).
     index : RealAlmIndex shared by all fields.
-    backend : 'dense', 'ducc', or 's2fft'.
+    backend : 'dense', 'ducc', 's2fft', or 'almond' (GPU, PowerSpec/almond).
     template_alpha : None for exact (Woodbury, alpha->inf) deprojection,
         or a finite number: covariance gains alpha_rel * tr(C)/(t^T t) * t t^T
         per template (the "correctly large prefactor" prescription).
@@ -99,6 +99,13 @@ class CovModel:
                          for f in fields]
         elif backend == "s2fft":
             self._sht = [sht.S2fftSHT(self.nside, index, f.spin, f.obs_pix)
+                         for f in fields]
+        elif backend == "almond":
+            # GPU transforms from the Almond library (PowerSpec/almond); same
+            # numpy-in/numpy-out interface as RealSHT, so it rides the same
+            # pure_callback path as the 'ducc' backend.
+            from almond.simaster import AlmondRealSHT
+            self._sht = [AlmondRealSHT(self.nside, index, f.spin, f.obs_pix)
                          for f in fields]
         else:
             raise ValueError(f"unknown backend {backend!r}")

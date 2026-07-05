@@ -46,7 +46,7 @@ Precomputes everything tied to (fields, fiducial, bins). Important options:
 |---|---|---|
 | `lmax` | `3*nside-1` | covariance bandlimit (aliasing caveat in method.md) |
 | `lmin` | 2 | lowest multipole in the band basis |
-| `backend` | auto | `'dense'` (GPU GEMM, nside≲64), `'ducc'` (matrix-free CPU), or `'s2fft'` (native-JAX on-device; opt-in, needs fixed s2fft — see method.md) |
+| `backend` | auto | `'dense'` (GPU GEMM, nside≲64), `'ducc'` (matrix-free CPU), `'s2fft'` (native-JAX on-device; opt-in, needs fixed s2fft — see method.md), or `'almond'` (GPU matrix-free via the Almond CUDA SHT library; ducc-equivalent, same `pure_callback` path) |
 | `noise_cov` | None | `PixelNoiseCov` for per-pixel *block* noise (e.g. correlated I/Q/U); default is diagonal `1/ivar` per field. Its field list/order and `nrow` must match the workspace |
 | `fisher_mode` | auto | `'exact'`, `'subsampled'`, or `'mc'` (see method.md) |
 | `fisher_frac` | 0.25 | fraction of mode columns solved in `'subsampled'` mode |

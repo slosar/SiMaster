@@ -126,7 +126,7 @@ and the dense projector is negligible). The one-off harvest amortizes after
 since `W` is tied to `C(fiducial)`). Natural next step: thick-restart to cap
 the harvest memory, and per-iteration recycling across consecutive RHS.
 
-## SHT backends (`dense` / `ducc` / `s2fft`)
+## SHT backends (`dense` / `ducc` / `s2fft` / `almond`)
 
 Every `C·x` needs a synthesis `Y` (real-basis coefficients → observed-pixel
 map) and its **exact transpose** `Yᵀ`. The three backends differ only in how
@@ -173,6 +173,17 @@ that adjoint pair is realized; all agree to ~1e-13 and are interchangeable:
   few-percent HEALPix quadrature error — that is expected and irrelevant
   here, because QML uses `Yᵀ` (the exact transpose), never the quadrature
   `forward`.
+- **`almond`** — matrix-free transforms through [Almond](../../almond), an
+  in-house CUDA/CuPy SHT library implementing ducc0's exact algorithm on the
+  GPU (spin-0 and spin-2, synthesis and exact adjoint `Yᵀ`, float64, healpy
+  conventions, validated against ducc0 to ~1e-12). It rides the same
+  `jax.pure_callback` path as `ducc` (numpy-in/numpy-out `AlmondRealSHT`), so
+  it is a drop-in alternative that keeps the SHT on the GPU. On a dedicated
+  A100 it beats 64-thread ducc0 by ~6× (spin-0) / ~2.5–3× (spin-2). Opt-in
+  (`backend='almond'`), not selected by `'auto'`; requires the `almond`
+  package installed and a GPU. **Note:** with JAX and CuPy sharing one device,
+  set `XLA_PYTHON_CLIENT_ALLOCATOR=platform` (and `PREALLOCATE=false`) or the
+  two allocators fragment the GPU and OOM at `nside ≳ 128`.
 
 ## Response (Fisher), noise bias, windows
 

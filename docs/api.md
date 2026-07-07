@@ -71,8 +71,8 @@ Methods:
   only flat band *deviations* are fitted (see method.md); `result.deviation`
   flags this and `result.cl` then holds deviations.
 - `run_exact(sample_frac=None, sample_seed=0, keep_samples=False)` /
-  `run_mc(n_sims_fisher=None, n_sims_noise=None)` — force the response
-  computation (an engine is run automatically on first `estimate`).
+  `run_mc(n_sims_fisher=None, n_sims_noise=None, third_moment=True)` — force the
+  response computation (an engine is run automatically on first `estimate`).
   `sample_frac=f` gives the subsampled engine directly. `keep_samples=True`
   retains the per-mode contributions (in `_subsample_store`) for the
   subsampling error budget and fills the otherwise-zero `n_hat_err`. With
@@ -89,6 +89,15 @@ Methods:
   Evaluated at the fiducial (default), supplied `data`, or an arbitrary `ref`
   bandpower vector. The `SubsampleStore` is checkpointable
   (`save`/`load`/`merge`) for multi-node aggregation.
+- **Bandpower third moment (offset-lognormal / x-factor diagnostic).**
+  `run_mc(third_moment=True)` (default) also accumulates, from the *same* Fisher
+  sims (~free), the tensor `c3_hat[A,B] = ⟨δc_A² δc_B⟩` — its diagonal is the
+  per-band third central moment (`skew_hat`, per-band skewness), its off-diagonal
+  the `xxy` cross term. `param_third_moment(w)` / `param_skewness(w)` propagate it
+  into a *parameter* direction `θ = Σ_A w_A c_A` (using `xxx`+`xxy`, dropping the
+  sub-dominant fully-off-diagonal `xyz`): a coherent amplitude can be strongly
+  non-Gaussian even when every individual band looks Gaussian, which is when the
+  offset-lognormal (`compress`, analytic `x = R⁻¹n`) correction matters.
 - `build_deflation(k=None, steps=None, n_probes=None, seed=0)` — (re)build
   the deflated/recycled-CG subspace from the current `C` (harvested by
   recycling a short instrumented solve); called automatically before the

@@ -892,8 +892,16 @@ class QMLWorkspace:
         self._log(f"assembled  condition {np.linalg.cond(self.R_hat):.2e}")
 
     # ------------------------------------------------------------- MC engine --
-    def run_mc(self, n_sims_fisher=None, n_sims_noise=None):
-        """Estimate response matrix R, noise bias n, and window functions."""
+    def run_mc(self, n_sims_fisher=None, n_sims_noise=None, third_moment=True):
+        """Estimate response matrix R, noise bias n, and window functions.
+
+        ``third_moment`` (default True, ~free): also accumulate the bandpower
+        third-moment tensor ``c3_hat[A,B] = <dc_A^2 dc_B>`` (its diagonal is the
+        per-band third central moment -> ``skew_hat``; the off-diagonal is the
+        ``xxy`` cross term needed to propagate skewness into a *parameter*
+        direction via :meth:`param_skewness`). Uses the same Fisher sims, costs
+        one extra ``n_bands x n_sims`` stash + an ``n_bands^2`` matmul.
+        """
         nf = n_sims_fisher or self.n_sims_fisher
         nn = n_sims_noise or self.n_sims_noise
         self._prepare_deprojection()
@@ -904,6 +912,7 @@ class QMLWorkspace:
         t0 = time.time()
         s_y = np.zeros(nb); s_yy = np.zeros((nb, nb))
         s_l = np.zeros(nl); s_yl = np.zeros((nb, nl))
+        Yall = np.empty((nb, nf)) if third_moment else None
         done = 0
         while done < nf:
             B = min(self.batch_size, nf - done)
@@ -912,6 +921,8 @@ class QMLWorkspace:
             yb, yl = np.asarray(yb), np.asarray(yl)
             s_y += yb.sum(1); s_yy += yb @ yb.T
             s_l += yl.sum(1); s_yl += yb @ yl.T
+            if third_moment:
+                Yall[:, done:done + B] = yb
             done += B
             self._log(f"fisher MC {done}/{nf} (cg iters {self.last_cg[0]}, "
                       f"res {self.last_cg[1]:.1e})")
@@ -940,8 +951,47 @@ class QMLWorkspace:
         self.hartlap = h
         self.R_inv = h * np.linalg.inv(self.R_hat)
         self._mc_done = True
+        self.c3_hat = None; self.skew_hat = None
+        if third_moment:
+            C = self.R_inv @ (Yall - self.n_hat[:, None])    # (nb, nf) per-sim bandpowers
+            dC = C - C.mean(1, keepdims=True)
+            fac = nf ** 2 / ((nf - 1) * (nf - 2))            # unbiased 3rd central moment
+            self.c3_hat = fac * (dC ** 2) @ dC.T / nf        # [A,B] = <dc_A^2 dc_B>
+            var = (dC ** 2).mean(1)
+            self.skew_hat = np.diag(self.c3_hat) / np.clip(var, 1e-300, None) ** 1.5
         self._log(f"MC done in {time.time() - t0:.1f}s "
-                  f"(R condition {np.linalg.cond(self.R_hat):.2e}, hartlap {h:.3f})")
+                  f"(R condition {np.linalg.cond(self.R_hat):.2e}, hartlap {h:.3f}"
+                  + (f", median |skew| {np.nanmedian(np.abs(self.skew_hat)):.3f}"
+                     if third_moment else "") + ")")
+
+    def param_third_moment(self, w):
+        r"""Third central moment of a parameter combination ``theta = sum_A w_A c_A``,
+        from the ``xxx``+``xxy`` tensor ``c3_hat`` (drops the fully-off-diagonal
+        ``xyz`` term, sub-dominant for weakly band-coupled QML bandpowers)::
+
+            <dtheta^3> = sum_A w_A^3 T_AAA + 3 sum_{A!=B} w_A^2 w_B T_AAB
+                       = 3 (w^2)^T C3 w - 2 sum_A w_A^3 C3_AA .
+
+        ``w`` is over the full band set (``nspec*nbands``); zero-pad / restrict to
+        the user bands as needed. Needs ``run_mc(third_moment=True)``.
+        """
+        if getattr(self, "c3_hat", None) is None:
+            raise RuntimeError("run_mc(third_moment=True) required")
+        w = np.asarray(w, dtype=float)
+        T = self.c3_hat
+        return float(3.0 * (w ** 2) @ (T @ w) - 2.0 * np.sum(w ** 3 * np.diag(T)))
+
+    def param_skewness(self, w, cov=None):
+        """Skewness of ``theta = sum_A w_A c_A``: ``<dtheta^3> / Var(theta)^1.5``,
+        with ``Var(theta) = w^T cov w`` (``cov`` defaults to the reported bandpower
+        covariance ``R_inv``). A quick gauge of how non-Gaussian a parameter's
+        likelihood is -- i.e. whether the offset-lognormal (x-factor) correction
+        matters for that direction, even when every individual band looks Gaussian.
+        """
+        w = np.asarray(w, dtype=float)
+        cov = self.R_inv if cov is None else cov
+        var = float(w @ cov @ w)
+        return self.param_third_moment(w) / max(var, 1e-300) ** 1.5
 
     # ------------------------------------------------------------- estimation --
     def run_mean_debias(self, n_sims=128):

@@ -78,6 +78,25 @@ the guaranteed upper bound `2 max_p(w² ivar) · npix/4π`, beyond which
 iterations; strongly varying `w² ivar` costs more (the bound is then loose) —
 this is the main performance caveat for highly anisotropic noise.
 
+### Dense-Cholesky filter (`solver='cholesky'`)
+
+CG convergence degrades with the conditioning of `C`: for signal-dominated
+data `κ ~ max_l C_l/N_l` (true Planck 143 GHz noise gives `κ ~ 1e7`,
+independent of nside), and no preconditioner/deflation combination in
+SiMaster tames that regime — the slow subspace is the whole signal band.
+`solver='cholesky'` sidesteps the iterative solver entirely: the dense
+covariance is assembled once by applying the matrix-free operator to
+identity column blocks (so it is exactly the same `C` as every other code
+path, any SHT backend), factorized in place with LAPACK `dpotrf`, and every
+filter application becomes two triangular solves.  Direct factorization is
+insensitive to conditioning (float64 keeps `~16 − log10 κ` digits, i.e. ~9
+digits at `κ = 1e7`), so this is the exact-filter option at true Planck
+noise.  The price is `O(nrow²)` memory — ~69 GB at nside=64 for a T/Q/U
+analysis with fsky 0.63 — making it a **CPU-node tool for nside ≤ 64**
+(validation, ground truth, honest optimality comparisons); `'cg'` remains
+the scalable default.  `deflation` is ignored (nothing to deflate) and the
+factor is invalidated by `update_fiducial`/`iterate`.
+
 ## Deflated / recycled CG (`deflation`)
 
 Every Fisher engine applies `M = C⁻¹` to **thousands** of right-hand sides

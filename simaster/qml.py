@@ -214,6 +214,19 @@ class QMLWorkspace:
     deflation_steps : Lanczos/CG steps for the harvest (default ~max(2k+10,
         40)); must exceed k.  deflation_probes : number of random probes
         whose Ritz vectors are stacked (default 1; more broadens the subspace).
+    solver : 'cg' (default) or 'cholesky'.
+        'cholesky' assembles the dense covariance C once (by applying the
+        matrix-free operator to identity column blocks), factorizes it in
+        place (LAPACK dpotrf) and answers every filter application with two
+        triangular solves.  Unlike CG, the cost is *independent of the
+        conditioning* of C -- float64 retains ~ 16 - log10(kappa) digits, so
+        even the true-Planck-noise kappa ~ 1e7 (where CG stalls; see
+        docs/method.md) loses only ~7 of 16 digits.  Memory is O(nrow^2)
+        (8 * nrow^2 bytes: ~69 GB at nside=64 with an fsky=0.63 T/Q/U mask),
+        so this is a CPU-node tool for nside <= 64; 'cg' remains the scalable
+        default.  ``deflation`` is ignored with this solver (nothing to
+        deflate), and the factor is rebuilt automatically after
+        ``update_fiducial``.
     """
 
     def __init__(self, fields, bins: Bins, cl_fid, lmax=None, lmin=2,
@@ -223,7 +236,7 @@ class QMLWorkspace:
                  cg_maxiter=700, seed=1234, template_alpha=None,
                  deproject_low_ell=True, batch_size=256, cachedir=None,
                  deflation=0, deflation_steps=None, deflation_probes=1,
-                 noise_cov=None, verbose=True):
+                 noise_cov=None, solver="cg", verbose=True):
         if isinstance(fields, Field):
             fields = [fields]
         self.fields = fields
@@ -240,6 +253,12 @@ class QMLWorkspace:
         self.verbose = verbose
         self.cg_tol, self.cg_maxiter = cg_tol, cg_maxiter
         self.batch_size = batch_size
+        if solver not in ("cg", "cholesky"):
+            raise ValueError(f"solver must be 'cg' or 'cholesky', got {solver!r}")
+        self.solver = solver
+        self._chol = None        # (factor, lower) once built (cholesky solver)
+        if solver == "cholesky" and deflation:
+            deflation = 0        # nothing to deflate: solves are direct
         self.deflation = int(deflation)
         self.deflation_steps = deflation_steps
         self.deflation_probes = int(deflation_probes)
@@ -354,12 +373,54 @@ class QMLWorkspace:
 
     # ------------------------------------------------------------ the filter --
     def _solve(self, B):
-        """C^-1 B by preconditioned CG (with preconditioner auto-repair),
-        deflated/recycled when a deflation space has been built."""
+        """C^-1 B: preconditioned CG (with preconditioner auto-repair,
+        deflated/recycled when a deflation space has been built), or two
+        triangular solves against the dense Cholesky factor when
+        ``solver='cholesky'`` (built lazily on first use)."""
+        if self.solver == "cholesky":
+            from scipy.linalg import cho_solve
+            if self._chol is None:
+                self._build_cholesky()
+            X = cho_solve(self._chol, np.asarray(B), check_finite=False)
+            self.last_cg = (0, 0.0)
+            return jnp.asarray(X, dtype=self.cov.dtype)
         X, self.last_cg = solve_C(self.cov, B, tol=self.cg_tol,
                                   maxiter=self.cg_maxiter, log=self._log,
                                   deflation=self._defl)
         return X
+
+    def _build_cholesky(self, block=4096):
+        """Assemble the dense covariance and factorize it in place.
+
+        C is assembled column-block by column-block as ``apply_C(I_block)``,
+        so it is exactly the operator every other code path uses (any SHT
+        backend, finite-alpha template term included); the Woodbury
+        (alpha -> infinity) deprojection stays outside C, in ``_filter``,
+        as with CG.  LAPACK ``dpotrf`` reads only the lower triangle, so the
+        ~1e-13 operator-roundtrip asymmetry of the assembled C is irrelevant.
+        Cost: nrow/block operator applications + nrow^3/3 flops; memory:
+        one (nrow, nrow) float64 array, factorized in place.
+        """
+        from scipy.linalg import cho_factor
+        n = self.cov.nrow
+        self._log(f"cholesky: assembling dense C ({n} x {n}, "
+                  f"{8.0 * n * n / 1e9:.1f} GB)")
+        t0 = time.time()
+        C = np.empty((n, n), dtype=np.float64)
+        for j0 in range(0, n, block):
+            j1 = min(j0 + block, n)
+            E = np.zeros((n, j1 - j0))
+            E[np.arange(j0, j1), np.arange(j1 - j0)] = 1.0
+            C[:, j0:j1] = np.asarray(self.cov.apply_C(
+                jnp.asarray(E, dtype=self.cov.dtype)))
+            if self.verbose and (j0 // block) % 8 == 0:
+                self._log(f"cholesky: assembled {j1}/{n} columns")
+        self._log(f"cholesky: C assembled in {time.time() - t0:.1f}s; "
+                  f"factorizing (dpotrf)")
+        t0 = time.time()
+        self._chol = cho_factor(C, lower=True, overwrite_a=True,
+                                check_finite=False)
+        self._log(f"cholesky: factorized in {time.time() - t0:.1f}s")
 
     def build_deflation(self, k=None, steps=None, n_probes=None, seed=0,
                         cache=None):
@@ -445,6 +506,8 @@ class QMLWorkspace:
 
     def _ensure_deflation(self):
         """Build the deflation space on first use if requested and absent."""
+        if self.solver == "cholesky":
+            return
         if self.deflation > 0 and self._defl is None:
             self.build_deflation()
 
@@ -1228,6 +1291,7 @@ class QMLWorkspace:
         self.cov.set_clmat(clmat)
         self._mc_done = False
         self._defl = None        # stale: deflation space is tied to C(fiducial)
+        self._chol = None        # stale: dense factor is tied to C(fiducial)
         self.ybar_debias = None  # stale: tied to the previous fiducial
 
     def update_fiducial_deviations(self, dc_full):
@@ -1244,6 +1308,7 @@ class QMLWorkspace:
         self.cov.set_clmat(clmat)
         self._mc_done = False
         self._defl = None
+        self._chol = None
         self.ybar_debias = None
 
     def iterate(self, data=None, n_iter=2, deviations=False):

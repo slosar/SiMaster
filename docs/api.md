@@ -55,6 +55,7 @@ Precomputes everything tied to (fields, fiducial, bins). Important options:
 | `template_alpha` | None | None = exact Woodbury deprojection; finite = add `alpha*tr(C)/||t||^2 t t^T` |
 | `deproject_low_ell` | True | marginalize monopole+dipole of spin-0 fields |
 | `cg_tol`, `cg_maxiter` | 1e-5, 700 | inverse-covariance solver |
+| `solver` | `'cg'` | `'cholesky'`: assemble dense C once + LAPACK factorization; conditioning-independent exact filter, O(nrow²) memory (CPU-node tool, nside ≤ 64; see method.md) |
 | `deflation` | 0 | `k>0`: deflated/recycled CG — project the `k` slowest eigen-directions of `P⁻¹C` (harvested once) out of every solve; same result, ~1.5–2× fewer iters (method.md) |
 | `deflation_steps`, `deflation_probes` | None, 1 | harvest Lanczos steps (default `~max(2k+10,40)`) and number of random probes |
 | `batch_size` | 256 | RHS per GPU batch |

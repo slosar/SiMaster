@@ -257,6 +257,7 @@ class QMLWorkspace:
             raise ValueError(f"solver must be 'cg' or 'cholesky', got {solver!r}")
         self.solver = solver
         self._chol = None        # (factor, lower) once built (cholesky solver)
+        self.chol_cache = None   # optional .npy path for the factor (resume)
         if solver == "cholesky" and deflation:
             deflation = 0        # nothing to deflate: solves are direct
         self.deflation = int(deflation)
@@ -389,20 +390,68 @@ class QMLWorkspace:
                                   deflation=self._defl)
         return X
 
-    def _build_cholesky(self, block=4096):
+    def _to_modes_onehot(self, j0, j1):
+        """B Y^T W E for an identity column block E = I[:, j0:j1].
+
+        On the dense backend the adjoint of a one-hot batch is a row *gather*
+        of the stored Y (no GEMM); numerically identical to
+        ``cov.to_modes(E)`` and ~4x cheaper for the dense-C assembly.
+        Returns a numpy (Nc, K, j1-j0) array.
+        """
+        cov = self.cov
+        A = np.zeros((cov.ncomp, cov.K, j1 - j0))
+        for i, f in enumerate(cov.fields):
+            sl = cov.slices[i]
+            lo, hi = max(j0, sl.start), min(j1, sl.stop)
+            if lo >= hi:
+                continue
+            rows = np.arange(lo, hi) - sl.start
+            c_loc, p = rows // f.nobs, rows % f.nobs
+            w = np.asarray(cov.w[i])[c_loc, p]
+            Yr = (np.asarray(cov.Y[i][rows]) * w[:, None]
+                  ).reshape(rows.size, f.ncomp, cov.K)
+            for cc, cg in enumerate(cov.comp_of_field[i]):
+                A[cg, :, lo - j0:hi - j0] = Yr[:, cc, :].T
+            if cov.beams[i] is not None:
+                bl = np.asarray(cov.beams[i])
+                for cg in cov.comp_of_field[i]:
+                    A[cg, :, lo - j0:hi - j0] *= bl[:, None]
+        return A
+
+    def _build_cholesky(self, block=4096, cache=None):
         """Assemble the dense covariance and factorize it in place.
 
         C is assembled column-block by column-block as ``apply_C(I_block)``,
         so it is exactly the operator every other code path uses (any SHT
         backend, finite-alpha template term included); the Woodbury
         (alpha -> infinity) deprojection stays outside C, in ``_filter``,
-        as with CG.  LAPACK ``dpotrf`` reads only the lower triangle, so the
-        ~1e-13 operator-roundtrip asymmetry of the assembled C is irrelevant.
+        as with CG.  On the dense backend the adjoint half of each block is
+        a row gather of the stored Y (see :meth:`_to_modes_onehot`) instead
+        of a full GEMM -- same numbers, ~4x faster assembly.  LAPACK
+        ``dpotrf`` reads only the lower triangle, so the ~1e-13
+        operator-roundtrip asymmetry of the assembled C is irrelevant.
         Cost: nrow/block operator applications + nrow^3/3 flops; memory:
         one (nrow, nrow) float64 array, factorized in place.
+
+        ``cache`` (falling back to ``self.chol_cache``) is a path to an .npy
+        holding the factorized triangle: loaded if present (mmap-free full
+        read), written after factorization otherwise -- resume insurance for
+        long jobs.  The cache is tied to C(fields, fiducial, noise): stale
+        caches are the caller's responsibility (delete on fiducial change).
         """
         from scipy.linalg import cho_factor
+        cache = cache or getattr(self, "chol_cache", None)
         n = self.cov.nrow
+        if cache and os.path.exists(cache):
+            t0 = time.time()
+            L = np.load(cache)
+            if L.shape != (n, n):
+                raise ValueError(f"cholesky cache {cache} has shape {L.shape}, "
+                                 f"expected ({n}, {n})")
+            self._chol = (L, True)
+            self._log(f"cholesky: factor loaded from {cache} "
+                      f"in {time.time() - t0:.1f}s")
+            return
         self._log(f"cholesky: assembling dense C ({n} x {n}, "
                   f"{8.0 * n * n / 1e9:.1f} GB)")
         t0 = time.time()
@@ -411,8 +460,20 @@ class QMLWorkspace:
             j1 = min(j0 + block, n)
             E = np.zeros((n, j1 - j0))
             E[np.arange(j0, j1), np.arange(j1 - j0)] = 1.0
-            C[:, j0:j1] = np.asarray(self.cov.apply_C(
-                jnp.asarray(E, dtype=self.cov.dtype)))
+            if self.backend == "dense":
+                A = jnp.asarray(self._to_modes_onehot(j0, j1),
+                                dtype=self.cov.dtype)
+                SA = jnp.einsum("cdk,dkb->ckb", self.cov.cl_k, A)
+                blk = (self.cov.from_modes(SA)
+                       + self.cov.noise.apply(jnp.asarray(E, self.cov.dtype)))
+                if self.cov.template_alpha is not None:
+                    Tm = self.cov.Tmat
+                    blk = blk + Tm @ (self.cov.template_alpha[:, None]
+                                      * Tm[j0:j1].T)
+                C[:, j0:j1] = np.asarray(blk)
+            else:
+                C[:, j0:j1] = np.asarray(self.cov.apply_C(
+                    jnp.asarray(E, dtype=self.cov.dtype)))
             if self.verbose and (j0 // block) % 8 == 0:
                 self._log(f"cholesky: assembled {j1}/{n} columns")
         self._log(f"cholesky: C assembled in {time.time() - t0:.1f}s; "
@@ -421,6 +482,13 @@ class QMLWorkspace:
         self._chol = cho_factor(C, lower=True, overwrite_a=True,
                                 check_finite=False)
         self._log(f"cholesky: factorized in {time.time() - t0:.1f}s")
+        if cache:
+            t0 = time.time()
+            tmp = f"{cache}.{os.getpid()}.tmp.npy"
+            np.save(tmp, self._chol[0])
+            os.replace(tmp, cache)
+            self._log(f"cholesky: factor cached to {cache} "
+                      f"in {time.time() - t0:.1f}s")
 
     def build_deflation(self, k=None, steps=None, n_probes=None, seed=0,
                         cache=None):

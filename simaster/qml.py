@@ -1023,7 +1023,8 @@ class QMLWorkspace:
         self._log(f"assembled  condition {np.linalg.cond(self.R_hat):.2e}")
 
     # ------------------------------------------------------------- MC engine --
-    def run_mc(self, n_sims_fisher=None, n_sims_noise=None, third_moment=True):
+    def run_mc(self, n_sims_fisher=None, n_sims_noise=None, third_moment=True,
+               store_bandpowers=False):
         """Estimate response matrix R, noise bias n, and window functions.
 
         ``third_moment`` (default True, ~free): also accumulate the bandpower
@@ -1032,6 +1033,12 @@ class QMLWorkspace:
         ``xxy`` cross term needed to propagate skewness into a *parameter*
         direction via :meth:`param_skewness`). Uses the same Fisher sims, costs
         one extra ``n_bands x n_sims`` stash + an ``n_bands^2`` matmul.
+
+        ``store_bandpowers`` (default False): keep the per-sim fiducial bandpowers
+        ``self.mc_bandpowers`` (``n_sims, n_bands``) so the Hamimeche-Lewis
+        transformed-space covariance can be built with
+        :func:`~simaster.build_Mf` for the calibrated offset-lognormal / HL
+        likelihood (~``8 n_bands n_sims`` bytes).
         """
         nf = n_sims_fisher or self.n_sims_fisher
         nn = n_sims_noise or self.n_sims_noise
@@ -1043,7 +1050,8 @@ class QMLWorkspace:
         t0 = time.time()
         s_y = np.zeros(nb); s_yy = np.zeros((nb, nb))
         s_l = np.zeros(nl); s_yl = np.zeros((nb, nl))
-        Yall = np.empty((nb, nf)) if third_moment else None
+        keep_y = third_moment or store_bandpowers
+        Yall = np.empty((nb, nf)) if keep_y else None
         done = 0
         while done < nf:
             B = min(self.batch_size, nf - done)
@@ -1052,7 +1060,7 @@ class QMLWorkspace:
             yb, yl = np.asarray(yb), np.asarray(yl)
             s_y += yb.sum(1); s_yy += yb @ yb.T
             s_l += yl.sum(1); s_yl += yb @ yl.T
-            if third_moment:
+            if keep_y:
                 Yall[:, done:done + B] = yb
             done += B
             self._log(f"fisher MC {done}/{nf} (cg iters {self.last_cg[0]}, "
@@ -1082,9 +1090,12 @@ class QMLWorkspace:
         self.hartlap = h
         self.R_inv = h * np.linalg.inv(self.R_hat)
         self._mc_done = True
-        self.c3_hat = None; self.skew_hat = None
-        if third_moment:
+        self.c3_hat = None; self.skew_hat = None; self.mc_bandpowers = None
+        if keep_y:
             C = self.R_inv @ (Yall - self.n_hat[:, None])    # (nb, nf) per-sim bandpowers
+            if store_bandpowers:
+                self.mc_bandpowers = np.ascontiguousarray(C.T)   # (n_sims, n_bands)
+        if third_moment:
             dC = C - C.mean(1, keepdims=True)
             fac = nf ** 2 / ((nf - 1) * (nf - 2))            # unbiased 3rd central moment
             self.c3_hat = fac * (dC ** 2) @ dC.T / nf        # [A,B] = <dc_A^2 dc_B>

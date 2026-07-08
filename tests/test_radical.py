@@ -82,6 +82,39 @@ def test_hl_compressed_likelihood():
     assert sm.CompressedLikelihood.load(p).transform == "hl"
 
 
+def test_transform_residual_and_calibrated_Mf():
+    """transform_residual limits + the M_f-calibrated (full-HL) likelihood is
+    calibrated (mean chi^2 ~ dof) on chi^2-distributed fiducial sims, for both
+    the lognormal and HL transforms."""
+    rng = np.random.default_rng(0)
+    nb = 6
+    c_fid = np.array([300.0, 30.0, 12.0, 7.0, 5.0, 4.0])
+    x = np.ones(nb)
+    is_auto = np.ones(nb, bool)
+    F = np.eye(nb)
+    nu = np.array([3, 5, 9, 15, 25, 40])            # per-band effective d.o.f.
+
+    def draw(n):                                     # skewed, positive: (c+x)*chi2_nu/nu - x
+        return (c_fid + x) * (rng.chisquare(nu, size=(n, nb)) / nu) - x
+
+    sim, test = draw(8000), draw(8000)
+    # transform_residual: gaussian is exact; lognormal/HL -> (c_hat-c) near fiducial
+    d = 1e-4 * c_fid
+    assert np.allclose(sm.transform_residual(c_fid + d, c_fid, x, is_auto, "gaussian"), d)
+    for tr in ("lognormal", "hl"):
+        Xr = sm.transform_residual(c_fid + d, c_fid, x, is_auto, tr, c_fid=c_fid)
+        assert np.allclose(Xr, d, rtol=1e-2)
+    # calibrated likelihood: mean chi^2 ~ dof (the raw-Fisher form would inflate)
+    for tr in ("lognormal", "hl"):
+        cov_X, xbar = sm.build_Mf(sim, c_fid, x, is_auto, transform=tr)
+        assert cov_X.shape == (nb, nb)
+        c2 = np.array([-2 * sm.CompressedLikelihood(
+            np.arange(nb), ["a"], ci, x, F, is_auto,
+            transform=tr, cov_X=cov_X, xbar=xbar, c_fid=c_fid).loglike(c_fid)
+            for ci in test])
+        assert abs(c2.mean() - nb) < 0.2 * nb
+
+
 @pytest.mark.slow
 def test_offset_lognormal_beats_gaussian():
     """Offset-lognormal tracks the exact (dense) likelihood much better

@@ -61,6 +61,60 @@ def g_vst(x):
     return np.sign(u) * np.sqrt(2.0 * np.clip(t, 0.0, None))
 
 
+def transform_residual(c_hat, c, x, is_auto, transform="lognormal", c_fid=None):
+    r"""Transformed residual ``X_b`` used by the compressed likelihood -- the
+    quantity that is approximately Gaussian with covariance ``M_f`` about the
+    fiducial (Hamimeche-Lewis).
+
+    ``c_hat`` estimate (data), ``c`` theory point, ``c_fid`` fiducial for the
+    ``D = c_fid+x`` prefactor (default ``c``: BJK evaluates the curvature at the
+    current point).  With ``ratio = (c_hat+x)/(c+x)``::
+
+        gaussian :  X = c_hat - c
+        lognormal:  X = (c_fid+x) * ln(ratio)   [autos];  c_hat-c [cross/invalid]
+        hl       :  X = (c_fid+x) * g(ratio)    [autos];  c_hat-c [cross/invalid]
+
+    (``g`` = :func:`g_vst`.)  ``X`` -> ``c_hat-c`` near the fiducial for every
+    transform, so a Gaussian metric on ``X`` reduces to the usual one there.
+    """
+    c_hat = np.asarray(c_hat, dtype=float); c = np.asarray(c, dtype=float)
+    x = np.asarray(x, dtype=float); is_auto = np.asarray(is_auto, dtype=bool)
+    if transform == "gaussian":
+        return c_hat - c
+    c_fid = c if c_fid is None else np.asarray(c_fid, dtype=float)
+    use = is_auto & (c + x > 0) & (c_hat + x > 0) & (c_fid + x > 0)
+    D = np.where(use, c_fid + x, 1.0)
+    ratio = np.clip((c_hat + x) / np.where(use, c + x, 1.0), 1e-300, None)
+    if transform == "lognormal":
+        tr = np.log(ratio)
+    elif transform == "hl":
+        tr = g_vst(ratio)
+    else:
+        raise ValueError("transform must be 'gaussian', 'lognormal' or 'hl'")
+    return np.where(use, D * tr, c_hat - c)
+
+
+def build_Mf(sim_bandpowers, c_fid, x, is_auto, transform="hl", hartlap=True):
+    """Fiducial-covariance ``M_f`` of the transformed residual (Hamimeche-Lewis).
+
+    ``sim_bandpowers`` : ``(n_sims, n_bands)`` bandpowers of fiducial-model sims
+    (e.g. ``QMLWorkspace.mc_bandpowers`` from ``run_mc(store_bandpowers=True)``).
+    Returns ``(cov_X, xbar)``: the covariance and mean of ``X = transform_residual``
+    over the sims (evaluated with ``c = c_fid``).  ``cov_X`` is scaled so that its
+    inverse is the Hartlap-unbiased precision (``hartlap=True``); feed both to
+    :class:`CompressedLikelihood` as ``cov_X``/``xbar`` for the calibrated form.
+    """
+    sim = np.asarray(sim_bandpowers, dtype=float)
+    X = np.array([transform_residual(ci, c_fid, x, is_auto, transform, c_fid=c_fid)
+                  for ci in sim])
+    xbar = X.mean(0)
+    n, p = X.shape
+    cov = np.cov(X, rowvar=False)
+    if hartlap and n > p + 2:
+        cov = cov * (n - 1.0) / (n - p - 2.0)        # inv(cov) is then unbiased
+    return cov, xbar
+
+
 class CompressedLikelihood:
     """{c_hat, x, F} + spectrum metadata; callable offset-lognormal lnL.
 
@@ -73,13 +127,24 @@ class CompressedLikelihood:
     transform : 'lognormal' (BJK offset-lognormal, default) or 'hl'
         (Hamimeche & Lewis exact variance-stabilizing g-transform). Same
         x-factor offset and Fisher metric; 'hl' replaces ln(ratio) by g(ratio).
+    cov_X, xbar : optional (nb, nb) and (nb,).  If given, use the *calibrated*
+        (full HL) likelihood -- a Gaussian in the transformed residual
+        ``X = transform_residual(c_hat, c, x, ...; c_fid)`` with covariance
+        ``M_f = cov_X`` and mean ``xbar`` (from fiducial sims, see
+        :func:`build_Mf`), instead of the raw bandpower Fisher.  This is what
+        makes the ``g``-transform's better Gaussianization actually calibrate.
+    c_fid : optional fiducial for the ``D`` prefactor (default ``c_hat``).
     """
 
     def __init__(self, ells, spec_names, c_hat, x, F, is_auto,
-                 transform="lognormal"):
+                 transform="lognormal", cov_X=None, xbar=None, c_fid=None):
         if transform not in ("lognormal", "hl"):
             raise ValueError("transform must be 'lognormal' or 'hl'")
         self.transform = transform
+        self.cov_X = None if cov_X is None else np.asarray(cov_X, dtype=float)
+        self.Mf_inv = None if cov_X is None else np.linalg.inv(self.cov_X)
+        self.xbar = None if xbar is None else np.asarray(xbar, dtype=float)
+        self.c_fid = None if c_fid is None else np.asarray(c_fid, dtype=float)
         self.ells = np.asarray(ells)
         self.spec_names = list(spec_names)
         self.c_hat = np.asarray(c_hat, dtype=float)
@@ -109,6 +174,12 @@ class CompressedLikelihood:
         if isinstance(c, dict):
             c = np.concatenate([np.asarray(c[s]) for s in self.spec_names])
         c = np.asarray(c, dtype=float)
+        if self.cov_X is not None:                     # calibrated (full HL): M_f metric
+            c_fid = self.c_hat if self.c_fid is None else self.c_fid
+            X = transform_residual(self.c_hat, c, self.x, self.is_auto,
+                                   self.transform, c_fid=c_fid)
+            r = X - (0.0 if self.xbar is None else self.xbar)
+            return float(-0.5 * r @ self.Mf_inv @ r)
         if self.transform == "hl":
             bad = self.use_log & (c + self.x <= 0)
             if np.any(bad):
@@ -130,16 +201,25 @@ class CompressedLikelihood:
         return float(-0.5 * r @ self.F @ r)
 
     def save(self, path):
+        opt = {}
+        if self.cov_X is not None:
+            opt["cov_X"] = self.cov_X
+        if self.xbar is not None:
+            opt["xbar"] = self.xbar
+        if self.c_fid is not None:
+            opt["c_fid"] = self.c_fid
         np.savez(path, ells=self.ells, spec_names=self.spec_names,
                  c_hat=self.c_hat, x=self.x, F=self.F, is_auto=self.is_auto,
-                 transform=self.transform)
+                 transform=self.transform, **opt)
 
     @classmethod
     def load(cls, path):
         d = np.load(path, allow_pickle=True)
         transform = str(d["transform"]) if "transform" in d.files else "lognormal"
+        opt = {k: d[k] for k in ("cov_X", "xbar", "c_fid") if k in d.files}
         return cls(d["ells"], [str(s) for s in d["spec_names"]],
-                   d["c_hat"], d["x"], d["F"], d["is_auto"], transform=transform)
+                   d["c_hat"], d["x"], d["F"], d["is_auto"],
+                   transform=transform, **opt)
 
 
 def compress(ws, result=None, data=None, transform="lognormal"):

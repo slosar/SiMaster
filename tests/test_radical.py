@@ -47,6 +47,41 @@ def test_x_factor_identities():
     assert np.allclose(x2, nl_white, rtol=0.3)
 
 
+def test_g_vst():
+    """HL variance-stabilizing transform: exact chi^2 Gaussianizer, monotone,
+    stable near 1, and equal to ln(x) at leading order."""
+    x = np.array([0.25, 0.6, 1.0, 1.7, 4.0])
+    g = sm.g_vst(x)
+    assert g[2] == 0.0 and np.all(np.diff(g) > 0)
+    assert np.allclose(0.5 * g ** 2, x - np.log(x) - 1.0)      # -2lnL = nu * g^2/2
+    assert np.all(np.isfinite(sm.g_vst(1 + np.array([0.0, 1e-13, -1e-13]))))
+    u = 1e-3
+    assert abs(sm.g_vst(1 + u) - np.log1p(u)) < u ** 2          # ln to leading order
+
+
+def test_hl_compressed_likelihood():
+    """HL CompressedLikelihood peaks at the estimate, reduces to the offset-
+    lognormal near the fiducial, guards c+x<=0, and save/load round-trips."""
+    import os
+    import tempfile
+    w, b, cl_flat, mask, ivar = setup()
+    w.run_exact()
+    d = w.cov.sample(jax.random.PRNGKey(3), 1)
+    res = w.estimate(d)
+    ln = sm.compress(w, result=res, transform="lognormal")
+    hl = sm.compress(w, result=res, transform="hl")
+    assert hl.transform == "hl"
+    c0 = hl.c_hat
+    assert np.isclose(hl.loglike(c0), 0.0, atol=1e-9)           # peak at the estimate
+    assert hl.loglike(c0) > hl.loglike(1.1 * c0)               # peaked
+    cs = c0 + 0.02 / np.sqrt(np.diag(hl.F))                     # 0.02 sigma deviation
+    assert abs(hl.loglike(cs) / ln.loglike(cs) - 1.0) < 0.1    # HL -> lognormal near fid
+    bad = c0.copy(); bad[np.flatnonzero(hl.use_log)[0]] = -9e9
+    assert hl.loglike(bad) == -np.inf
+    p = os.path.join(tempfile.mkdtemp(), "hl.npz"); hl.save(p)
+    assert sm.CompressedLikelihood.load(p).transform == "hl"
+
+
 @pytest.mark.slow
 def test_offset_lognormal_beats_gaussian():
     """Offset-lognormal tracks the exact (dense) likelihood much better

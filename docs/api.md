@@ -196,13 +196,20 @@ in-allocation driver and `simaster/nersc/run_auto.sh` the reference sbatch.
 
 NaMaster-style one-call interface; returns spectra in NaMaster row ordering.
 
-## `simaster.compress(workspace, result=None, data=None)` → `CompressedLikelihood`
+## `simaster.compress(workspace, result=None, data=None, transform="lognormal")` → `CompressedLikelihood`
 
 Bond–Jaffe–Knox radical compression: reduces an estimate to `{c_hat, x, F}`
 with x-factors `x = R⁻¹n` and an offset-lognormal likelihood
 (`Z_b = ln(c_b + x_b)` for autos; crosses stay Gaussian). The result has
 `loglike(c_theory)`, `loglike_gaussian(c_theory)`, `save(path)` and
 `CompressedLikelihood.load(path)`. See method.md and the report.
+
+`transform='hl'` uses the Hamimeche & Lewis (2008) exact variance-stabilizing
+transform `g(x)=sign(x-1)√(2(x−ln x−1))` (exposed as `simaster.g_vst`) in place
+of `ln`. `g` is the exact Gaussianizer of the per-mode Wishart/χ² likelihood
+(vs `ln`'s approximation) and reduces the residual per-band skewness more, but
+its aggressive tail means a *calibrated* likelihood wants HL's transformed-space
+covariance `M_f=cov(X)` (from fiducial sims), not the raw bandpower Fisher.
 
 ## `simaster.score` (advanced)
 

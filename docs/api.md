@@ -207,9 +207,19 @@ with x-factors `x = R⁻¹n` and an offset-lognormal likelihood
 `transform='hl'` uses the Hamimeche & Lewis (2008) exact variance-stabilizing
 transform `g(x)=sign(x-1)√(2(x−ln x−1))` (exposed as `simaster.g_vst`) in place
 of `ln`. `g` is the exact Gaussianizer of the per-mode Wishart/χ² likelihood
-(vs `ln`'s approximation) and reduces the residual per-band skewness more, but
-its aggressive tail means a *calibrated* likelihood wants HL's transformed-space
-covariance `M_f=cov(X)` (from fiducial sims), not the raw bandpower Fisher.
+(vs `ln`'s approximation) and reduces the residual per-band skewness more.
+
+**Calibrated (full HL) form.** Its aggressive tail means a *calibrated*
+likelihood needs HL's transformed-space covariance `M_f=cov(X)` (from fiducial
+sims), not the raw bandpower Fisher. `run_mc(store_bandpowers=True)` keeps the
+per-sim bandpowers (`mc_bandpowers`); `M_f, x̄ = build_Mf(mc_bandpowers[:,keep],
+c_fid, x, is_auto, transform)`; then `CompressedLikelihood(..., cov_X=M_f,
+xbar=x̄, c_fid=…)` evaluates `−2lnL=(X−x̄)ᵀM_f⁻¹(X−x̄)`. `transform_residual` is
+the public building block. Passing `spec_pairs=` (the component-index pair of
+each spectrum) selects the **full HL matrix transform** — the per-band n×n
+field-covariance eigen-transform that handles T/E/B cross-spectra jointly
+(reduces exactly to the scalar form for one field). See
+`experiments/hl_lognormal_likelihood/`.
 
 ## `simaster.score` (advanced)
 

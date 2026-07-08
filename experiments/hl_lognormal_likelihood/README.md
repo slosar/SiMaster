@@ -108,6 +108,33 @@ fiducial-sim covariance `M_f` is the only one of the five that is simultaneously
 (near-)perfectly Gaussianizing per band, calibrated in the joint χ² (KS-passing),
 and unbiased in the amplitude with correct coverage.
 
+## Full HL matrix transform — cross-spectra (T/E)  (`experiment_matrix.py`)
+
+The scalar transforms above treat each spectrum independently and keep the cross
+(TE/TB/EB) **Gaussian**. For correlated, few-mode bands the TE bandpower is
+*itself* non-Gaussian, so that is wrong. HL's full method assembles the per-band
+`n_comp × n_comp` field power matrix, whitens by the theory, applies `g` to its
+eigenvalues, and re-sandwiches with the fiducial — transforming all spectra
+jointly (`simaster.transform_residual(..., spec_pairs=...)`, exact-reduces to the
+scalar form for one field). A deterministic (T,E) test on synthetic Wishart
+bandpowers (corr(TE) ≈ 0.87, `ν = 4…22` modes/band, `dof=15`):
+
+| median \|residual skew\| | TT | **TE** | EE |
+|---|---|---|---|
+| raw | 0.99 | 0.95 | 0.94 |
+| HL scalar (TE Gaussian) | 0.02 | **0.90** | 0.02 |
+| HL matrix (TE joint) | 0.04 | **0.04** | 0.02 |
+
+| joint χ² KS p (all M_f-calibrated) | gaussian | lognormal | hl_scalar | **hl_matrix** |
+|---|---|---|---|---|
+| | 0.000 | 0.000 | 0.000 | **0.866** |
+
+**The scalar HL barely touches the TE skew (0.95→0.90) and fails the joint χ²;
+the matrix HL Gaussianizes TE (→0.04) and is the only one that passes (KS 0.87).**
+Figure: `results/matrix.png`; numbers: `results/matrix_summary.json`. This is the
+piece needed for a polarization (T/E/B) likelihood: cross-spectra must be
+transformed jointly, not kept Gaussian.
+
 ## Reproduce
 
 ```bash

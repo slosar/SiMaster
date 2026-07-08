@@ -55,13 +55,62 @@ def g_vst(x):
     counterpart.  Agrees with ``ln x`` to leading order (both ``~ x-1``) and
     differs at ``O((x-1)^2)``.  Stable near ``x=1`` via ``log1p``.
     """
-    x = np.asarray(x, dtype=float)
-    u = x - 1.0
+    u = np.clip(np.asarray(x, dtype=float), 1e-12, None) - 1.0
     t = u - np.log1p(u)                      # = x - ln x - 1, accurate near x=1
     return np.sign(u) * np.sqrt(2.0 * np.clip(t, 0.0, None))
 
 
-def transform_residual(c_hat, c, x, is_auto, transform="lognormal", c_fid=None):
+def _hl_matrix_residual(c_hat, c, x, c_fid, spec_pairs):
+    r"""Full Hamimeche-Lewis *matrix* g-transform residual.
+
+    Per band, assemble the ``n_comp x n_comp`` field power matrix from the
+    spectra (``spec_pairs`` gives the component index pair ``(i,j)`` of each
+    spectrum, in bandpower-vector order), form
+    ``A = C_tot^{-1/2} Chat_tot C_tot^{-1/2}`` (``*_tot = * + x`` on the diagonal
+    of noise), apply ``g`` to its eigenvalues, and re-sandwich with the fiducial
+    ``X = C_f_tot^{1/2} U g(D) U^T C_f_tot^{1/2}``.  Cross-spectra (TE/TB/EB) are
+    thereby transformed *jointly*, not kept Gaussian.  Bands whose theory/
+    fiducial/data matrices are not positive-definite fall back to ``c_hat - c``.
+    """
+    c_hat = np.asarray(c_hat, float); c = np.asarray(c, float)
+    x = np.asarray(x, float); c_fid = np.asarray(c_fid, float)
+    nspec = len(spec_pairs)
+    nb = c_hat.size // nspec
+    nc = 1 + max(max(i, j) for (i, j) in spec_pairs)
+
+    def to_mat(vec):
+        M = np.zeros((nb, nc, nc))
+        for s, (i, j) in enumerate(spec_pairs):
+            tot = vec[s * nb:(s + 1) * nb] + x[s * nb:(s + 1) * nb]
+            M[:, i, j] = tot; M[:, j, i] = tot
+        return M
+
+    Chat, Ctot, Cf = to_mat(c_hat), to_mat(c), to_mat(c_fid)
+
+    def matpow(M, p):                       # M^p per band via eigh (M spd)
+        w, V = np.linalg.eigh(M)
+        w = np.clip(w, 1e-30, None)
+        return (V * (w[:, None, :] ** p)) @ np.swapaxes(V, -1, -2)
+
+    valid = ((np.linalg.eigvalsh(Ctot)[:, 0] > 0)
+             & (np.linalg.eigvalsh(Cf)[:, 0] > 0)
+             & (np.linalg.eigvalsh(Chat)[:, 0] > 0))
+    Cis = matpow(Ctot, -0.5)
+    A = Cis @ Chat @ Cis
+    A = 0.5 * (A + np.swapaxes(A, -1, -2))
+    d, U = np.linalg.eigh(A)
+    Ug = (U * g_vst(np.clip(d, 1e-30, None))[:, None, :]) @ np.swapaxes(U, -1, -2)
+    Cfs = matpow(Cf, 0.5)
+    Xmat = Cfs @ Ug @ Cfs
+    X = np.empty_like(c_hat)
+    for s, (i, j) in enumerate(spec_pairs):
+        sl = slice(s * nb, (s + 1) * nb)
+        X[sl] = np.where(valid, Xmat[:, i, j], c_hat[sl] - c[sl])
+    return X
+
+
+def transform_residual(c_hat, c, x, is_auto, transform="lognormal", c_fid=None,
+                       spec_pairs=None):
     r"""Transformed residual ``X_b`` used by the compressed likelihood -- the
     quantity that is approximately Gaussian with covariance ``M_f`` about the
     fiducial (Hamimeche-Lewis).
@@ -76,11 +125,18 @@ def transform_residual(c_hat, c, x, is_auto, transform="lognormal", c_fid=None):
 
     (``g`` = :func:`g_vst`.)  ``X`` -> ``c_hat-c`` near the fiducial for every
     transform, so a Gaussian metric on ``X`` reduces to the usual one there.
+
+    ``spec_pairs`` (with ``transform='hl'``): the component-index pair of each
+    spectrum, in bandpower-vector (spec-major) order.  Triggers the full HL
+    *matrix* transform (:func:`_hl_matrix_residual`) that handles cross-spectra
+    jointly; for a single field it reduces exactly to the scalar form above.
     """
     c_hat = np.asarray(c_hat, dtype=float); c = np.asarray(c, dtype=float)
     x = np.asarray(x, dtype=float); is_auto = np.asarray(is_auto, dtype=bool)
     if transform == "gaussian":
         return c_hat - c
+    if transform == "hl" and spec_pairs is not None:
+        return _hl_matrix_residual(c_hat, c, x, c if c_fid is None else c_fid, spec_pairs)
     c_fid = c if c_fid is None else np.asarray(c_fid, dtype=float)
     use = is_auto & (c + x > 0) & (c_hat + x > 0) & (c_fid + x > 0)
     D = np.where(use, c_fid + x, 1.0)
@@ -94,7 +150,8 @@ def transform_residual(c_hat, c, x, is_auto, transform="lognormal", c_fid=None):
     return np.where(use, D * tr, c_hat - c)
 
 
-def build_Mf(sim_bandpowers, c_fid, x, is_auto, transform="hl", hartlap=True):
+def build_Mf(sim_bandpowers, c_fid, x, is_auto, transform="hl", hartlap=True,
+             spec_pairs=None):
     """Fiducial-covariance ``M_f`` of the transformed residual (Hamimeche-Lewis).
 
     ``sim_bandpowers`` : ``(n_sims, n_bands)`` bandpowers of fiducial-model sims
@@ -103,10 +160,12 @@ def build_Mf(sim_bandpowers, c_fid, x, is_auto, transform="hl", hartlap=True):
     over the sims (evaluated with ``c = c_fid``).  ``cov_X`` is scaled so that its
     inverse is the Hartlap-unbiased precision (``hartlap=True``); feed both to
     :class:`CompressedLikelihood` as ``cov_X``/``xbar`` for the calibrated form.
+    ``spec_pairs`` selects the full HL *matrix* transform (see
+    :func:`transform_residual`).
     """
     sim = np.asarray(sim_bandpowers, dtype=float)
-    X = np.array([transform_residual(ci, c_fid, x, is_auto, transform, c_fid=c_fid)
-                  for ci in sim])
+    X = np.array([transform_residual(ci, c_fid, x, is_auto, transform, c_fid=c_fid,
+                                     spec_pairs=spec_pairs) for ci in sim])
     xbar = X.mean(0)
     n, p = X.shape
     cov = np.cov(X, rowvar=False)
@@ -137,7 +196,8 @@ class CompressedLikelihood:
     """
 
     def __init__(self, ells, spec_names, c_hat, x, F, is_auto,
-                 transform="lognormal", cov_X=None, xbar=None, c_fid=None):
+                 transform="lognormal", cov_X=None, xbar=None, c_fid=None,
+                 spec_pairs=None):
         if transform not in ("lognormal", "hl"):
             raise ValueError("transform must be 'lognormal' or 'hl'")
         self.transform = transform
@@ -145,6 +205,7 @@ class CompressedLikelihood:
         self.Mf_inv = None if cov_X is None else np.linalg.inv(self.cov_X)
         self.xbar = None if xbar is None else np.asarray(xbar, dtype=float)
         self.c_fid = None if c_fid is None else np.asarray(c_fid, dtype=float)
+        self.spec_pairs = spec_pairs      # -> full HL matrix transform (calibrated)
         self.ells = np.asarray(ells)
         self.spec_names = list(spec_names)
         self.c_hat = np.asarray(c_hat, dtype=float)
@@ -177,7 +238,8 @@ class CompressedLikelihood:
         if self.cov_X is not None:                     # calibrated (full HL): M_f metric
             c_fid = self.c_hat if self.c_fid is None else self.c_fid
             X = transform_residual(self.c_hat, c, self.x, self.is_auto,
-                                   self.transform, c_fid=c_fid)
+                                   self.transform, c_fid=c_fid,
+                                   spec_pairs=self.spec_pairs)
             r = X - (0.0 if self.xbar is None else self.xbar)
             return float(-0.5 * r @ self.Mf_inv @ r)
         if self.transform == "hl":

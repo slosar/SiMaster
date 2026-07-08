@@ -115,6 +115,52 @@ def test_transform_residual_and_calibrated_Mf():
         assert abs(c2.mean() - nb) < 0.2 * nb
 
 
+def test_hl_matrix_transform():
+    """Full HL matrix transform: reduces to the scalar form for one field, and
+    for (T,E) jointly Gaussianizes the correlated TE cross-spectrum (which the
+    per-spectrum scalar HL keeps Gaussian), giving a calibrated likelihood."""
+    from scipy.stats import skew, wishart
+    rng = np.random.default_rng(1)
+    # n=1: matrix transform == scalar transform
+    m = 5
+    ch = np.abs(rng.normal(10, 3, m)); cc = np.abs(rng.normal(10, 2, m)); xs = np.ones(m)
+    a = sm.transform_residual(ch, cc, xs, np.ones(m, bool), "hl", c_fid=cc)
+    b = sm.transform_residual(ch, cc, xs, np.ones(m, bool), "hl", c_fid=cc, spec_pairs=[(0, 0)])
+    assert np.allclose(a, b)
+
+    # n=2 (T,E) Wishart data, few modes/band -> non-Gaussian, correlated TE
+    nb = 3; sp = [(0, 0), (0, 1), (1, 1)]
+    S = np.array([[[100.0, 30], [30, 40]], [[50, 15], [15, 25]], [[20, 5], [5, 12]]])
+    xm = np.array([[[2.0, 0], [0, 3]]] * nb)
+    Ctot = S + xm; nu = np.array([6, 12, 25])
+    xf = np.concatenate([np.full(nb, 2.0), np.zeros(nb), np.full(nb, 3.0)])
+    cfid = np.concatenate([S[:, 0, 0], S[:, 0, 1], S[:, 1, 1]])
+    is_auto = np.array([True] * nb + [False] * nb + [True] * nb)
+
+    def draw(n):
+        out = np.zeros((n, 3 * nb))
+        for bb in range(nb):
+            W = wishart.rvs(df=nu[bb], scale=Ctot[bb] / nu[bb], size=n, random_state=rng)
+            out[:, bb] = W[:, 0, 0] - xm[bb, 0, 0]
+            out[:, nb + bb] = W[:, 0, 1]
+            out[:, 2 * nb + bb] = W[:, 1, 1] - xm[bb, 1, 1]
+        return out
+
+    sim, test = draw(6000), draw(6000); dof = 3 * nb; F = np.eye(dof)
+    covX, xbar = sm.build_Mf(sim, cfid, xf, is_auto, "hl", spec_pairs=sp)
+    c2 = np.array([-2 * sm.CompressedLikelihood(
+        np.arange(dof), ["a"], ci, xf, F, is_auto, transform="hl",
+        cov_X=covX, xbar=xbar, c_fid=cfid, spec_pairs=sp).loglike(cfid) for ci in test])
+    assert abs(c2.mean() - dof) < 0.15 * dof                    # calibrated
+    # TE residual: matrix HL Gaussianizes it, scalar HL (spec_pairs=None) does not
+    te = slice(nb, 2 * nb)
+    Xm = np.array([sm.transform_residual(ci, cfid, xf, is_auto, "hl", c_fid=cfid, spec_pairs=sp)[te]
+                   for ci in test[:2000]])
+    Xs = np.array([sm.transform_residual(ci, cfid, xf, is_auto, "hl", c_fid=cfid)[te]
+                   for ci in test[:2000]])
+    assert np.nanmedian(np.abs(skew(Xm, 0))) < 0.5 * np.nanmedian(np.abs(skew(Xs, 0)))
+
+
 @pytest.mark.slow
 def test_offset_lognormal_beats_gaussian():
     """Offset-lognormal tracks the exact (dense) likelihood much better

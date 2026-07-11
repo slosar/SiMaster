@@ -3,7 +3,8 @@
 A quadratic-maximum-likelihood (optimal) bandpower estimator for spin-0 and
 spin-2 fields on cut skies, with a NaMaster-like interface.  All linear
 algebra is matrix-free (preconditioned conjugate gradients; no dense
-covariance inversion) and batched on GPU through JAX.
+covariance inversion) and batched on GPU through JAX or the device-resident
+Almond/CuPy backend.
 """
 
 import jax as _jax
@@ -26,7 +27,7 @@ from .mc_fisher import (MCFisherStore, compute_mc_error, BandedFisher,
 from .fisher_auto import Scheduler, LocalScheduler, run_auto
 from . import score  # field-level likelihood score / autodiff (advanced)
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = ["Field", "Bins", "PixelNoiseCov", "iqu_from_cov",
            "QMLWorkspace", "BandpowerResult",
            "LikelihoodExpansion", "compute_full_master", "cl_matrix",

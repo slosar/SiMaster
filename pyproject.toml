@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simaster"
-version = "0.1.0"
+version = "0.2.0"
 description = "QML (quadratic maximum likelihood) power spectrum estimation on the sphere, GPU-accelerated via JAX, with a NaMaster-like interface"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,6 +28,7 @@ gpu = ["jax[cuda12]"]
 # recursion-node bug (the backend self-checks and refuses to run on a buggy
 # build). See docs/method.md.
 s2fft = ["s2fft"]
+almond = ["almond>=0.5"]
 healsparse = ["healsparse"]
 test = ["pytest", "pytest-cov"]
 validation = ["pyccl", "matplotlib", "pymaster"]
@@ -38,4 +39,7 @@ include = ["simaster*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning"]
-markers = ["slow: heavy statistical tests, excluded in CI"]
+markers = [
+    "slow: heavy statistical tests, excluded in CI",
+    "gpu: requires an NVIDIA GPU and CUDA-enabled JAX/CuPy",
+]

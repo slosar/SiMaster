@@ -77,11 +77,12 @@ cov = result.cov                                # bandpower covariance
   projected out of every subsequent inverse-covariance solve, cutting CG
   iterations ~1.5–2× with no change to the result — a pure win shared by all
   Fisher engines
-- three exact SHT backends: `dense` (precomputed real-SH synthesis matrices;
+- four exact SHT backends: `dense` (precomputed real-SH synthesis matrices;
   everything is GPU GEMM — best for nside <= 64), `ducc` (matrix-free CPU
   transforms, scales to nside 1024+), and `s2fft` (native-JAX matrix-free
   transforms that stay on the accelerator and are differentiable — opt-in,
-  needs an s2fft build with exact HEALPix spin-2 synthesis; see
+  needs an s2fft build with exact HEALPix spin-2 synthesis), and `almond`
+  (CUDA/CuPy, device-resident batched CG with zero-copy JAX interchange; see
   `docs/method.md`)
 - pure Python; double precision end to end
 

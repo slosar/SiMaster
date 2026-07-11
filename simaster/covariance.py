@@ -101,9 +101,9 @@ class CovModel:
             self._sht = [sht.S2fftSHT(self.nside, index, f.spin, f.obs_pix)
                          for f in fields]
         elif backend == "almond":
-            # GPU transforms from the Almond library (PowerSpec/almond); same
-            # numpy-in/numpy-out interface as RealSHT, so it rides the same
-            # pure_callback path as the 'ducc' backend.
+            # GPU transforms from Almond. Standalone CovModel calls retain the
+            # callback-compatible interface; solve_C dispatches the complete
+            # covariance/preconditioner/PCG loop to almond_device instead.
             from almond.simaster import AlmondRealSHT
             self._sht = [AlmondRealSHT(self.nside, index, f.spin, f.obs_pix)
                          for f in fields]

@@ -119,6 +119,84 @@ def test_cg_solves_C():
     assert np.abs(resid).max() < 1e-5 * np.abs(b).max()
 
 
+@pytest.mark.gpu
+def test_almond_device_cov_and_cg_match_callback_path():
+    """CuPy covariance and PCG match the established Almond/JAX operator."""
+    cp = pytest.importorskip("cupy")
+    fields, cld = make_fields(aniso=True)
+    try:
+        cov, clmat, idx = build_cov(fields, cld, "almond")
+    except Exception as exc:
+        pytest.skip(f"Almond GPU backend unavailable: {exc}")
+    from simaster.almond_device import AlmondDeviceCov
+    from almond.interop import as_cupy
+    from simaster.cg import solve_C
+
+    rng = np.random.default_rng(771)
+    x = rng.standard_normal((cov.nrow, 3))
+    callback = np.asarray(cov.apply_C(x))
+    dc = AlmondDeviceCov(cov)
+    direct = cp.asnumpy(dc.apply_C(as_cupy(x)))
+    np.testing.assert_allclose(direct, callback, rtol=2e-11,
+                               atol=2e-12 * np.abs(callback).max())
+
+    b = rng.standard_normal((cov.nrow, 3))
+    sol, (_, rel) = solve_C(cov, b, tol=1e-8, maxiter=600)
+    resid = np.asarray(cov.apply_C(sol)) - b
+    assert rel < 1e-8
+    assert np.linalg.norm(resid) / np.linalg.norm(b) < 2e-7
+
+    # Existing deflation spaces are mirrored into CuPy and projected without
+    # re-entering the callback path during PCG.
+    from simaster.deflation import DeflationSpace
+    W, _ = np.linalg.qr(rng.standard_normal((cov.nrow, 3)))
+    defl = DeflationSpace(cov.apply_C, W)
+    sol_d, (_, rel_d) = solve_C(cov, b, tol=1e-8, maxiter=600,
+                                deflation=defl)
+    resid_d = np.asarray(cov.apply_C(sol_d)) - b
+    assert rel_d < 1e-8
+    assert np.linalg.norm(resid_d) / np.linalg.norm(b) < 2e-7
+
+    # Per-pixel I/Q/U block noise takes the same device path.
+    from simaster.noise import PixelNoiseCov
+    nobs = fields[0].nobs
+    II = np.full(nobs, 4e-5)
+    QQ = np.full(nobs, 3e-5)
+    UU = np.full(nobs, 3.5e-5)
+    z = np.zeros(nobs)
+    block_noise = PixelNoiseCov.iqu(
+        fields, II=II, IQ=0.05 * np.sqrt(II * QQ),
+        IU=z, QQ=QQ, QU=0.03 * np.sqrt(QQ * UU), UU=UU, check=False)
+    cov_b = CovModel(fields, clmat, idx, backend="almond", noise=block_noise)
+    callback_b = np.asarray(cov_b.apply_C(x))
+    direct_b = cp.asnumpy(AlmondDeviceCov(cov_b).apply_C(as_cupy(x)))
+    np.testing.assert_allclose(direct_b, callback_b, rtol=2e-11,
+                               atol=2e-12 * np.abs(callback_b).max())
+
+
+@pytest.mark.gpu
+def test_almond_full_qml_smoke():
+    """A complete exact-Fisher estimate uses the device solver successfully."""
+    pytest.importorskip("cupy")
+    nside, lmax = 4, 6
+    npix = 12 * nside ** 2
+    rng = np.random.default_rng(884)
+    mask = np.ones(npix)
+    mask[::5] = 0.0
+    ivar = 2e3 * mask
+    ell = np.arange(lmax + 1)
+    cl = np.zeros(lmax + 1)
+    cl[2:] = 1e-4 / (ell[2:] + 1) ** 2
+    f = sm.Field(mask, [rng.standard_normal(npix)], ivar=ivar, name="t")
+    ws = sm.QMLWorkspace(
+        [f], sm.Bins.linear(2, lmax, nlb=2), {("t_0", "t_0"): cl},
+        lmax=lmax, backend="almond", fisher_mode="exact",
+        deproject_low_ell=False, cg_tol=1e-7, batch_size=16, verbose=False)
+    result = ws.estimate()
+    assert np.all(np.isfinite(result.cov))
+    assert np.all(np.linalg.eigvalsh(result.cov) > 0)
+
+
 def test_precond_is_spd():
     fields, cld = make_fields(aniso=True)
     cov, _, _ = build_cov(fields, cld, "dense")

@@ -120,6 +120,11 @@ def solve_C(cov, B, tol=1e-6, maxiter=500, log=None, deflation=None):
     :class:`~simaster.deflation.DeflationSpace`) the slow eigen-directions are
     projected out -- same solution, fewer iterations.  Returns
     (X, (niter, rel_resid))."""
+    if cov.backend == "almond":
+        from .almond_device import solve_almond_device
+        return solve_almond_device(cov, B, tol=tol, maxiter=maxiter,
+                                   log=log, deflation=deflation)
+
     for _ in range(8):
         if deflation is None:
             X, (it, rel, indef) = pcg(cov.apply_C, cov.apply_precond, B,
